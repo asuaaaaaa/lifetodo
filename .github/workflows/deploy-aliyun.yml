@@ -52,5 +52,14 @@ jobs:
           script: |
             if command -v nginx >/dev/null 2>&1; then
               sudo nginx -t
-              sudo systemctl reload nginx
+              if sudo systemctl is-active --quiet nginx; then
+                sudo systemctl reload nginx
+              elif sudo systemctl list-unit-files nginx.service >/dev/null 2>&1; then
+                sudo systemctl start nginx
+              else
+                sudo nginx
+              fi
+            else
+              echo "nginx is not installed on the server"
+              exit 1
             fi
