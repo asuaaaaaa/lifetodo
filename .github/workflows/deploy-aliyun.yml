@@ -29,7 +29,7 @@ jobs:
       - name: Build static site
         run: node scripts/prepare-static-deploy.mjs
 
-      - name: Upload site to Aliyun ECS
+      - name: Upload site to Aliyun lightweight server
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.ALIYUN_HOST }}

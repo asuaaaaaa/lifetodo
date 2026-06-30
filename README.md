@@ -14,7 +14,7 @@
 - `docs/esp32-s3-touch-lcd-4.3.md`: ESP32-S3-Touch-LCD-4.3 设备端方案
 - `docs/apk-packaging.md`: H5 包装 APK 的建议路线
 - `docs/aliyun-deploy.md`: `lifetodo.xyz` 阿里云部署清单
-- `docs/github-aliyun-deploy.md`: GitHub Actions 自动部署到阿里云 ECS
+- `docs/github-aliyun-deploy.md`: GitHub Actions 自动部署到阿里云轻量应用服务器
 - `docs/project-status.md`: 当前完成项和下一步
 - `config/app-config.json`: 当前域名和入口 URL 配置
 - `scripts/prepare-static-deploy.mjs`: 生成静态部署目录

@@ -1,10 +1,16 @@
 # GitHub Actions 部署到阿里云
 
-目标：推送到 GitHub `main` 分支后，自动生成 H5 产物并部署到阿里云 ECS 的 Nginx 站点目录。
+目标：推送到 GitHub `main` 分支后，自动生成 H5 产物并部署到阿里云轻量应用服务器的 Nginx 站点目录。
 
-## 1. 阿里云 ECS 准备
+当前服务器：
 
-在 ECS 上准备站点目录：
+```text
+120.55.46.251
+```
+
+## 1. 阿里云轻量应用服务器准备
+
+在服务器上准备站点目录：
 
 ```bash
 sudo mkdir -p /var/www/lifetodo/dist/site
@@ -46,7 +52,7 @@ Settings -> Secrets and variables -> Actions -> New repository secret
 添加：
 
 ```text
-ALIYUN_HOST          ECS 公网 IP 或域名
+ALIYUN_HOST          120.55.46.251
 ALIYUN_PORT          SSH 端口，通常是 22
 ALIYUN_USER          部署用户
 ALIYUN_SSH_KEY       部署用户的私钥内容
@@ -57,23 +63,46 @@ ALIYUN_DEPLOY_PATH   /var/www/lifetodo/dist/site
 
 ## 3. SSH Key 建议
 
-在本机或 ECS 上生成一把专门用于部署的 key：
+在本机生成一把专门用于部署的 key，或在轻量应用服务器上生成后取回私钥：
 
 ```bash
 ssh-keygen -t ed25519 -C "github-actions-lifetodo"
 ```
 
-把公钥加入 ECS 部署用户的：
+你当前准备使用的公钥名称：
+
+```text
+github
+```
+
+公钥：
+
+```text
+ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCMkPAzaQTqf6AoNio3LsV/QUKNip5zZt2NEY0XTrcAg0xlCXlo+PQ8331dlqqVmFLdfdzLWsSFhkcQWqQ+KFKxoEfZHHPcUPY090zi7tBVfX4/rmlYFJnCU7RlkdeJaQTJd+rxxFI4FP8DWZksmVCg5qqQt6fGcZb+VhPb0yzsv9E4FZM3Pgzc/ZyYpMjH7XmsFPYZfQeGfVaauOfGlaP7mvzSGbJRG+7yvADcn9suROqLe27BpjdnEdYAxQ+cntozFQaXLF97FZMKG9o0bKSKLFc3vy+kqr3e2zKVNGcpX+a3d6GMGlu6C9PvsG9uFNj27KyCUQnbkwuG4CNpBx6p skp-bp1hwuiwm3c5fd3eevyg
+```
+
+把公钥加入轻量应用服务器部署用户的：
 
 ```text
 ~/.ssh/authorized_keys
 ```
 
-把私钥完整内容填入 GitHub Secret：
+示例：
+
+```bash
+mkdir -p ~/.ssh
+chmod 700 ~/.ssh
+echo 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCMkPAzaQTqf6AoNio3LsV/QUKNip5zZt2NEY0XTrcAg0xlCXlo+PQ8331dlqqVmFLdfdzLWsSFhkcQWqQ+KFKxoEfZHHPcUPY090zi7tBVfX4/rmlYFJnCU7RlkdeJaQTJd+rxxFI4FP8DWZksmVCg5qqQt6fGcZb+VhPb0yzsv9E4FZM3Pgzc/ZyYpMjH7XmsFPYZfQeGfVaauOfGlaP7mvzSGbJRG+7yvADcn9suROqLe27BpjdnEdYAxQ+cntozFQaXLF97FZMKG9o0bKSKLFc3vy+kqr3e2zKVNGcpX+a3d6GMGlu6C9PvsG9uFNj27KyCUQnbkwuG4CNpBx6p skp-bp1hwuiwm3c5fd3eevyg' >> ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+```
+
+然后把对应的私钥完整内容填入 GitHub Secret：
 
 ```text
 ALIYUN_SSH_KEY
 ```
+
+注意：GitHub Secrets 里填私钥，轻量应用服务器里放公钥。不要把私钥提交到仓库。
 
 ## 4. 触发部署
 

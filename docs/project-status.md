@@ -12,11 +12,12 @@
   - `https://lifetodo.xyz/app/?home=demo-home`
   - `https://lifetodo.xyz/device/?home=demo-home&device=entry`
 - 已提供静态部署脚本 `scripts/prepare-static-deploy.mjs`。
+- 阿里云轻量应用服务器公网 IP：`120.55.46.251`。
 
 ## 下一步
 
 - 在 Firebase Console 应用开发期 Firestore Rules。
 - 运行 `node scripts/prepare-static-deploy.mjs` 生成 `dist/site`。
-- 将 `dist/site` 部署到阿里云 OSS/CDN 或 Nginx。
+- 将 `dist/site` 通过 GitHub Actions 部署到阿里云轻量应用服务器 Nginx。
 - 打开 `https://lifetodo.xyz/app/?home=demo-home` 验证页面显示 `Firebase 已连接`。
 - 用另一端打开 `https://lifetodo.xyz/device/?home=demo-home&device=entry` 验证完成状态同步。

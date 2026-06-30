@@ -1,5 +1,6 @@
 {
   "domain": "lifetodo.xyz",
+  "aliyunServerIp": "120.55.46.251",
   "baseUrl": "https://lifetodo.xyz",
   "appUrl": "https://lifetodo.xyz/app/",
   "deviceUrlPattern": "https://lifetodo.xyz/device/?home={homeId}&device={deviceId}&token={token}",

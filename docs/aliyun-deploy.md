@@ -8,7 +8,13 @@ lifetodo.xyz
 
 ## 推荐部署结构
 
-当前推荐使用 GitHub Actions 部署到阿里云 ECS/Nginx。OSS + CDN 仍可作为后续更低成本的静态资源方案。
+当前推荐使用 GitHub Actions 部署到阿里云轻量应用服务器/Nginx。OSS + CDN 仍可作为后续更低成本的静态资源方案。
+
+服务器公网 IP：
+
+```text
+120.55.46.251
+```
 
 正式 URL：
 
@@ -31,7 +37,7 @@ https://lifetodo.xyz/device/?home=demo-home&device=entry
 docs/github-aliyun-deploy.md
 ```
 
-推送到 GitHub `main` 分支后，GitHub Actions 会自动生成 `dist/site` 并上传到 ECS。
+推送到 GitHub `main` 分支后，GitHub Actions 会自动生成 `dist/site` 并上传到轻量应用服务器。
 
 ## 本地生成静态目录
 
