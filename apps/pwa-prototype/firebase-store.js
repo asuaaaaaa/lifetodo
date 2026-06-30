@@ -84,6 +84,10 @@ function createLocalStore(seed) {
       state.members = state.members.filter((member) => member.id !== memberId);
       writeLocalState(state);
     },
+    async setCompletion(taskId, date, completed, source) {
+      setLocalCompletion(state, taskId, date, completed, source);
+      writeLocalState(state);
+    },
     async toggleCompletion(taskId, date, source) {
       toggleLocalCompletion(state, taskId, date, source);
       writeLocalState(state);
@@ -126,6 +130,11 @@ function createCloudStore(local, onChange) {
     async deleteMember(memberId) {
       local.getState().members = local.getState().members.filter((member) => member.id !== memberId);
       await writeCloudState(local.getState(), "deleteMember");
+      writeLocalState(local.getState());
+    },
+    async setCompletion(taskId, date, completed, source) {
+      setLocalCompletion(local.getState(), taskId, date, completed, source);
+      await writeCloudState(local.getState(), source);
       writeLocalState(local.getState());
     },
     async toggleCompletion(taskId, date, source) {
@@ -235,6 +244,15 @@ function normalizeTask(task) {
 function toggleLocalCompletion(state, taskId, date, source) {
   const key = `${taskId}_${date}`;
   if (state.completions[key]) {
+    delete state.completions[key];
+    return;
+  }
+  setLocalCompletion(state, taskId, date, true, source);
+}
+
+function setLocalCompletion(state, taskId, date, completed, source) {
+  const key = `${taskId}_${date}`;
+  if (!completed) {
     delete state.completions[key];
     return;
   }
