@@ -17,7 +17,7 @@ let authApi;
 let db;
 let user;
 
-export async function createStore(seed) {
+export async function createStore(seed, onChange = () => {}) {
   const local = createLocalStore(seed);
 
   try {
@@ -40,7 +40,7 @@ export async function createStore(seed) {
       local.replaceState(cloud);
     }
 
-    return createCloudStore(local);
+    return createCloudStore(local, onChange);
   } catch (error) {
     console.warn("Firebase unavailable, using localStorage.", error);
     return local;
@@ -63,6 +63,27 @@ function createLocalStore(seed) {
       state.tasks.push(task);
       writeLocalState(state);
     },
+    async updateTask(taskId, patch) {
+      state.tasks = state.tasks.map((task) => (task.id === taskId ? { ...task, ...patch } : task));
+      writeLocalState(state);
+    },
+    async deleteTask(taskId) {
+      state.tasks = state.tasks.filter((task) => task.id !== taskId);
+      Object.keys(state.completions).forEach((key) => {
+        if (key.startsWith(`${taskId}_`)) {
+          delete state.completions[key];
+        }
+      });
+      writeLocalState(state);
+    },
+    async addMember(member) {
+      state.members.push(member);
+      writeLocalState(state);
+    },
+    async deleteMember(memberId) {
+      state.members = state.members.filter((member) => member.id !== memberId);
+      writeLocalState(state);
+    },
     async toggleCompletion(taskId, date, source) {
       toggleLocalCompletion(state, taskId, date, source);
       writeLocalState(state);
@@ -70,7 +91,9 @@ function createLocalStore(seed) {
   };
 }
 
-function createCloudStore(local) {
+function createCloudStore(local, onChange) {
+  subscribeToCloudState(local, onChange);
+
   return {
     mode: "firebase",
     getState: local.getState,
@@ -80,12 +103,53 @@ function createCloudStore(local) {
       await writeCloudState(local.getState(), "addTask");
       writeLocalState(local.getState());
     },
+    async updateTask(taskId, patch) {
+      local.getState().tasks = local.getState().tasks.map((task) => (task.id === taskId ? { ...task, ...patch } : task));
+      await writeCloudState(local.getState(), "updateTask");
+      writeLocalState(local.getState());
+    },
+    async deleteTask(taskId) {
+      local.getState().tasks = local.getState().tasks.filter((task) => task.id !== taskId);
+      Object.keys(local.getState().completions).forEach((key) => {
+        if (key.startsWith(`${taskId}_`)) {
+          delete local.getState().completions[key];
+        }
+      });
+      await writeCloudState(local.getState(), "deleteTask");
+      writeLocalState(local.getState());
+    },
+    async addMember(member) {
+      local.getState().members.push(member);
+      await writeCloudState(local.getState(), "addMember");
+      writeLocalState(local.getState());
+    },
+    async deleteMember(memberId) {
+      local.getState().members = local.getState().members.filter((member) => member.id !== memberId);
+      await writeCloudState(local.getState(), "deleteMember");
+      writeLocalState(local.getState());
+    },
     async toggleCompletion(taskId, date, source) {
       toggleLocalCompletion(local.getState(), taskId, date, source);
       await writeCloudState(local.getState(), source);
       writeLocalState(local.getState());
     }
   };
+}
+
+function subscribeToCloudState(local, onChange) {
+  const homeRef = firestoreApi.doc(db, "homes", homeId);
+  firestoreApi.onSnapshot(homeRef, (snapshot) => {
+    if (!snapshot.exists()) {
+      return;
+    }
+    const data = snapshot.data();
+    local.replaceState({
+      members: data.members || [],
+      tasks: data.tasks || [],
+      completions: data.completions || {}
+    });
+    onChange();
+  });
 }
 
 async function ensureUser() {
@@ -146,9 +210,25 @@ function writeLocalState(state) {
 
 function normalizeState(state) {
   return {
-    members: Array.isArray(state.members) ? state.members : [],
-    tasks: Array.isArray(state.tasks) ? state.tasks : [],
+    members: Array.isArray(state.members) ? state.members.map(normalizeMember) : [],
+    tasks: Array.isArray(state.tasks) ? state.tasks.map(normalizeTask) : [],
     completions: state.completions && typeof state.completions === "object" ? state.completions : {}
+  };
+}
+
+function normalizeMember(member) {
+  return {
+    id: member.id,
+    name: member.name || member.displayName || "成员",
+    color: member.color || member.avatarColor || "#ef7f65"
+  };
+}
+
+function normalizeTask(task) {
+  return {
+    ...task,
+    assigneeId: task.assigneeId || task.assigneeIds?.[0],
+    enabled: task.enabled !== false
   };
 }
 

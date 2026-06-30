@@ -24,6 +24,7 @@
         <nav class="segmented" aria-label="视图切换">
           <button class="segment active" type="button" data-view="today">今日</button>
           <button class="segment" type="button" data-view="tasks">任务</button>
+          <button class="segment" type="button" data-view="members">成员</button>
           <button class="segment" type="button" data-view="device">设备</button>
         </nav>
 
@@ -44,15 +45,52 @@
             </label>
             <label>
               <span>周期</span>
-              <select name="recurrence">
-                <option value="interval-3">每 3 天</option>
-                <option value="weekly-0">每周日</option>
-                <option value="monthly-1">每月 1 日</option>
+              <select name="recurrenceType" id="recurrenceType">
+                <option value="intervalDays">每 N 天</option>
+                <option value="weekly">每周</option>
+                <option value="monthlyDate">每月固定日期</option>
               </select>
             </label>
+            <div class="form-grid">
+              <label data-recurrence-field="intervalDays">
+                <span>间隔天数</span>
+                <input name="intervalEvery" type="number" min="1" max="60" value="3">
+              </label>
+              <label data-recurrence-field="weekly">
+                <span>星期</span>
+                <select name="weekday">
+                  <option value="1">周一</option>
+                  <option value="2">周二</option>
+                  <option value="3">周三</option>
+                  <option value="4">周四</option>
+                  <option value="5">周五</option>
+                  <option value="6">周六</option>
+                  <option value="0">周日</option>
+                </select>
+              </label>
+              <label data-recurrence-field="monthlyDate">
+                <span>每月日期</span>
+                <input name="monthDay" type="number" min="1" max="31" value="1">
+              </label>
+            </div>
             <button class="primary-button" type="submit">添加</button>
           </form>
           <div class="task-list" id="allTasks"></div>
+        </section>
+
+        <section class="view" id="membersView">
+          <form class="task-form" id="memberForm">
+            <label>
+              <span>成员名称</span>
+              <input name="name" required placeholder="比如：妈妈">
+            </label>
+            <label>
+              <span>颜色</span>
+              <input name="color" type="color" value="#ef7f65">
+            </label>
+            <button class="primary-button" type="submit">添加成员</button>
+          </form>
+          <div class="task-list" id="memberManager"></div>
         </section>
 
         <section class="view" id="deviceView">
