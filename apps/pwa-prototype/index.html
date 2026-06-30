@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f7f2ea">
+    <title>LifeTodo</title>
+    <link rel="manifest" href="./manifest.webmanifest">
+    <link rel="stylesheet" href="../../design-system/tokens.css">
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="phone-panel" aria-label="手机端">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">LifeTodo</p>
+            <h1>今天</h1>
+            <p class="sync-mode" data-sync-mode>连接中</p>
+          </div>
+          <button class="icon-button" id="resetData" type="button" aria-label="重置数据" title="重置数据">↺</button>
+        </header>
+
+        <nav class="segmented" aria-label="视图切换">
+          <button class="segment active" type="button" data-view="today">今日</button>
+          <button class="segment" type="button" data-view="tasks">任务</button>
+          <button class="segment" type="button" data-view="device">设备</button>
+        </nav>
+
+        <section class="view active" id="todayView">
+          <div class="summary-strip" id="summaryStrip"></div>
+          <div class="member-list" id="todayList"></div>
+        </section>
+
+        <section class="view" id="tasksView">
+          <form class="task-form" id="taskForm">
+            <label>
+              <span>事项</span>
+              <input name="title" required placeholder="比如：铲猫砂盆">
+            </label>
+            <label>
+              <span>成员</span>
+              <select name="assigneeId" id="assigneeSelect"></select>
+            </label>
+            <label>
+              <span>周期</span>
+              <select name="recurrence">
+                <option value="interval-3">每 3 天</option>
+                <option value="weekly-0">每周日</option>
+                <option value="monthly-1">每月 1 日</option>
+              </select>
+            </label>
+            <button class="primary-button" type="submit">添加</button>
+          </form>
+          <div class="task-list" id="allTasks"></div>
+        </section>
+
+        <section class="view" id="deviceView">
+          <div class="device-frame">
+            <div class="device-screen" id="deviceScreen"></div>
+          </div>
+        </section>
+      </section>
+    </main>
+    <script src="./app.js" type="module"></script>
+  </body>
+</html>

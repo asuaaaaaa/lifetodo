@@ -1,0 +1,8 @@
+{
+  "domain": "lifetodo.xyz",
+  "baseUrl": "https://lifetodo.xyz",
+  "appUrl": "https://lifetodo.xyz/app/",
+  "deviceUrlPattern": "https://lifetodo.xyz/device/?home={homeId}&device={deviceId}&token={token}",
+  "firebaseProjectId": "lifetodo-47399",
+  "defaultHomeId": "demo-home"
+}

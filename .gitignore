@@ -1,0 +1,8 @@
+dist/
+.agents/
+.extract-design-system/
+skills-lock.json
+
+.DS_Store
+node_modules/
+npm-debug.log*
