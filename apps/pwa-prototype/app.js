@@ -159,8 +159,8 @@ function completionKey(taskId) {
   return `${taskId}_${todayKey}`;
 }
 
-async function toggleTask(taskId) {
-  await store.toggleCompletion(taskId, todayKey, isDevicePage ? "device-h5" : "app-h5");
+async function toggleTask(taskId, completed) {
+  await store.setCompletion(taskId, todayKey, !completed, isDevicePage ? "device-h5" : "app-h5");
   render();
 }
 
@@ -237,10 +237,10 @@ function memberSection(member, tasks) {
 function taskButton(task) {
   const done = Boolean(state().completions[completionKey(task.id)]);
   return `
-    <button class="task-row ${done ? "done" : ""}" type="button" data-task-id="${task.id}">
+    <button class="task-row ${done ? "done" : ""}" type="button" data-completion-task-id="${task.id}" data-completed="${done}">
       <span class="check">✓</span>
       <span><strong class="task-title">${escapeHtml(task.title)}</strong><br><span class="task-meta">${escapeHtml(task.label)}</span></span>
-      <span class="task-meta">${done ? "完成" : "待做"}</span>
+      <span class="task-meta">${done ? "恢复" : "完成"}</span>
     </button>
   `;
 }
@@ -328,12 +328,16 @@ function devicePerson(member, tasks) {
 
 function deviceTask(task) {
   const done = Boolean(state().completions[completionKey(task.id)]);
-  return `<button class="device-task ${done ? "done" : ""}" type="button" data-task-id="${task.id}"><span>${escapeHtml(task.title)}</span><span>${done ? "✓" : "○"}</span></button>`;
+  return `<button class="device-task ${done ? "done" : ""}" type="button" data-completion-task-id="${task.id}" data-completed="${done}"><span>${escapeHtml(task.title)}</span><span>${done ? "恢复" : "完成"}</span></button>`;
 }
 
 function bindTaskButtons() {
-  document.querySelectorAll("[data-task-id]").forEach((button) => {
-    button.addEventListener("click", () => toggleTask(button.dataset.taskId), { once: true });
+  document.querySelectorAll("[data-completion-task-id]").forEach((button) => {
+    button.addEventListener(
+      "click",
+      () => toggleTask(button.dataset.completionTaskId, button.dataset.completed === "true"),
+      { once: true }
+    );
   });
 }
 
