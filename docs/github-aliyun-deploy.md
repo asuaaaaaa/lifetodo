@@ -54,7 +54,7 @@ Settings -> Secrets and variables -> Actions -> New repository secret
 ```text
 ALIYUN_HOST          120.55.46.251
 ALIYUN_PORT          SSH 端口，通常是 22
-ALIYUN_USER          部署用户
+ALIYUN_USER          admin
 ALIYUN_SSH_KEY       部署用户的私钥内容
 ALIYUN_DEPLOY_PATH   /var/www/lifetodo/dist/site
 ```
@@ -102,7 +102,7 @@ chmod 600 ~/.ssh/authorized_keys
 ALIYUN_SSH_KEY
 ```
 
-注意：GitHub Secrets 里填私钥，轻量应用服务器里放公钥。不要把私钥提交到仓库。
+注意：GitHub Secrets 里填私钥，轻量应用服务器里放公钥。不要把私钥提交到仓库，也不要把私钥发到聊天或文档中。
 
 ## 4. 触发部署
 
