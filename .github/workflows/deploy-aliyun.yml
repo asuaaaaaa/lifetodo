@@ -39,8 +39,8 @@ jobs:
           source: "dist/site"
           target: ${{ secrets.ALIYUN_DEPLOY_PATH || '/var/www/lifetodo/dist/site' }}
           strip_components: 1
-          overwrite: true
-          # rm: true
+          # overwrite: true
+          rm: true
 
       - name: Reload Nginx
         uses: appleboy/ssh-action@v1.0.3
