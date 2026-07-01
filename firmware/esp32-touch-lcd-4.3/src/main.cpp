@@ -1,8 +1,11 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <Arduino_GFX_Library.h>
+#include <DNSServer.h>
 #include <HTTPClient.h>
+#include <Preferences.h>
 #include <TAMC_GT911.h>
+#include <WebServer.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <Wire.h>
@@ -50,6 +53,8 @@ constexpr uint8_t EXIO_LCD_BL = 2;
 constexpr uint8_t EXIO_LCD_RST = 3;
 constexpr uint32_t TASK_CLICK_REARM_RELEASE_MS = 220;
 constexpr uint32_t CLOUD_SYNC_INTERVAL_MS = 60000;
+constexpr uint32_t WIFI_CONNECT_TIMEOUT_MS = 12000;
+constexpr uint16_t DNS_PORT = 53;
 constexpr size_t MAX_TASKS = 4;
 constexpr size_t MAX_COMPLETIONS = 40;
 uint8_t ch422g_output = 0xff;
@@ -85,13 +90,27 @@ lv_obj_t *brightness_panel;
 lv_obj_t *brightness_slider;
 lv_obj_t *brightness_value_label;
 lv_obj_t *brightness_gesture_zone;
+lv_obj_t *wifi_setup_panel;
+lv_obj_t *wifi_setup_title;
+lv_obj_t *wifi_setup_body;
+lv_obj_t *wifi_setup_hint;
 uint32_t last_heartbeat_ms = 0;
 uint32_t last_touch_log_ms = 0;
 uint32_t last_cloud_sync_ms = 0;
+uint32_t wifi_connect_started_ms = 0;
 bool brightness_panel_open = false;
+bool provisioning_active = false;
+bool wifi_connect_pending = false;
 uint8_t brightness_percent = 100;
 bool cloud_ready = false;
 char today_key[11] = "2026-07-01";
+String pending_wifi_ssid;
+String pending_wifi_password;
+String provisioning_ap_ssid;
+
+Preferences wifi_preferences;
+DNSServer dns_server;
+WebServer wifi_server(80);
 
 struct Task {
   char id[40];
@@ -134,6 +153,11 @@ void update_summary();
 void render_tasks();
 bool sync_from_cloud();
 bool push_completions_to_cloud();
+void set_wifi_setup_visible(bool visible, const char *title, const char *body, const char *hint);
+void start_wifi_provisioning();
+void stop_wifi_provisioning();
+bool connect_saved_wifi();
+void handle_wifi_services();
 
 void set_cjk_font(lv_obj_t *obj) {
   lv_obj_set_style_text_font(obj, &lifetodo_pingfang_24, 0);
@@ -757,27 +781,252 @@ void build_brightness_controls() {
   lv_obj_set_style_border_width(handle, 0, 0);
 }
 
-void connect_wifi() {
-  if (strlen(WIFI_SSID) == 0) {
-    lv_label_set_text(status_label, "离线演示");
+void set_wifi_setup_visible(bool visible, const char *title, const char *body, const char *hint) {
+  if (!wifi_setup_panel) return;
+
+  if (!visible) {
+    lv_obj_add_flag(wifi_setup_panel, LV_OBJ_FLAG_HIDDEN);
     return;
   }
 
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  lv_label_set_text(wifi_setup_title, title ? title : "Wi-Fi 配网");
+  lv_label_set_text(wifi_setup_body, body ? body : "");
+  lv_label_set_text(wifi_setup_hint, hint ? hint : "");
+  lv_obj_clear_flag(wifi_setup_panel, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_foreground(wifi_setup_panel);
+}
 
-  uint32_t start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < 8000) {
-    delay(250);
+void build_wifi_setup_panel() {
+  wifi_setup_panel = lv_obj_create(root);
+  lv_obj_set_size(wifi_setup_panel, 560, 236);
+  lv_obj_align(wifi_setup_panel, LV_ALIGN_CENTER, 0, 24);
+  make_static_touch_obj(wifi_setup_panel);
+  lv_obj_clear_flag(wifi_setup_panel, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_style_radius(wifi_setup_panel, 8, 0);
+  lv_obj_set_style_bg_color(wifi_setup_panel, lv_color_hex(0x171512), 0);
+  lv_obj_set_style_bg_opa(wifi_setup_panel, LV_OPA_90, 0);
+  lv_obj_set_style_border_width(wifi_setup_panel, 0, 0);
+  lv_obj_set_style_pad_all(wifi_setup_panel, 22, 0);
+
+  wifi_setup_title = lv_label_create(wifi_setup_panel);
+  set_cjk_title_font(wifi_setup_title);
+  lv_obj_set_style_text_color(wifi_setup_title, lv_color_hex(0xfffdfa), 0);
+  lv_obj_set_width(wifi_setup_title, 516);
+  lv_label_set_long_mode(wifi_setup_title, LV_LABEL_LONG_WRAP);
+  lv_obj_align(wifi_setup_title, LV_ALIGN_TOP_LEFT, 0, 0);
+
+  wifi_setup_body = lv_label_create(wifi_setup_panel);
+  lv_obj_set_style_text_font(wifi_setup_body, &lv_font_montserrat_24, 0);
+  lv_obj_set_style_text_color(wifi_setup_body, lv_color_hex(0xf1c45b), 0);
+  lv_obj_set_width(wifi_setup_body, 516);
+  lv_label_set_long_mode(wifi_setup_body, LV_LABEL_LONG_WRAP);
+  lv_obj_align(wifi_setup_body, LV_ALIGN_TOP_LEFT, 0, 70);
+
+  wifi_setup_hint = lv_label_create(wifi_setup_panel);
+  set_cjk_font(wifi_setup_hint);
+  lv_obj_set_style_text_color(wifi_setup_hint, lv_color_hex(0xd8d0c3), 0);
+  lv_obj_set_width(wifi_setup_hint, 516);
+  lv_label_set_long_mode(wifi_setup_hint, LV_LABEL_LONG_WRAP);
+  lv_obj_align(wifi_setup_hint, LV_ALIGN_TOP_LEFT, 0, 122);
+
+  set_wifi_setup_visible(false, "", "", "");
+}
+
+String html_escape(const String &value) {
+  String escaped;
+  escaped.reserve(value.length() + 8);
+  for (size_t i = 0; i < value.length(); i++) {
+    char c = value[i];
+    if (c == '&') escaped += F("&amp;");
+    else if (c == '<') escaped += F("&lt;");
+    else if (c == '>') escaped += F("&gt;");
+    else if (c == '"') escaped += F("&quot;");
+    else escaped += c;
+  }
+  return escaped;
+}
+
+String saved_wifi_ssid() {
+  wifi_preferences.begin("lifetodo", false);
+  String ssid = wifi_preferences.isKey("wifi_ssid") ? wifi_preferences.getString("wifi_ssid") : String(WIFI_SSID);
+  wifi_preferences.end();
+  return ssid;
+}
+
+String saved_wifi_password() {
+  wifi_preferences.begin("lifetodo", false);
+  String password = wifi_preferences.isKey("wifi_pass") ? wifi_preferences.getString("wifi_pass") : String(WIFI_PASSWORD);
+  wifi_preferences.end();
+  return password;
+}
+
+void save_wifi_credentials(const String &ssid, const String &password) {
+  wifi_preferences.begin("lifetodo", false);
+  wifi_preferences.putString("wifi_ssid", ssid);
+  wifi_preferences.putString("wifi_pass", password);
+  wifi_preferences.end();
+}
+
+void send_wifi_setup_page() {
+  String current_ssid = saved_wifi_ssid();
+  String page =
+      F("<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>LifeTodo Wi-Fi</title><style>"
+        "body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif;background:#fffaf0;color:#171512}"
+        "main{max-width:520px;margin:0 auto;padding:28px 20px}"
+        "h1{font-size:30px;margin:8px 0 10px}.muted{color:#6e675d;line-height:1.55}"
+        "form{margin-top:24px}label{display:block;margin:16px 0 8px;font-weight:700}"
+        "input{box-sizing:border-box;width:100%;height:52px;border:2px solid #d8d0c3;border-radius:8px;padding:0 14px;font-size:18px;background:#fffdfa}"
+        "button{width:100%;height:54px;margin-top:24px;border:0;border-radius:8px;background:#171512;color:#fffdfa;font-size:18px;font-weight:700}"
+        ".chip{display:inline-block;margin-top:14px;padding:8px 12px;border-radius:8px;background:#efe7d7;color:#171512}"
+        "</style></head><body><main><h1>LifeTodo 配网</h1>"
+        "<p class='muted'>选择家里的 Wi-Fi，提交后设备会自动保存并连接。连接成功后屏幕会回到今日任务。</p>");
+  page += F("<span class='chip'>设备热点 ");
+  page += html_escape(provisioning_ap_ssid);
+  page += F("</span><form method='post' action='/api/wifi'>"
+            "<label>Wi-Fi 名称</label><input name='ssid' required maxlength='32' value='");
+  page += html_escape(current_ssid);
+  page += F("'><label>Wi-Fi 密码</label><input name='password' type='password' maxlength='64'>"
+            "<button type='submit'>保存并连接</button></form></main></body></html>");
+  wifi_server.send(200, "text/html; charset=utf-8", page);
+}
+
+void handle_wifi_status_api() {
+  JsonDocument doc;
+  doc["connected"] = WiFi.status() == WL_CONNECTED;
+  doc["provisioning"] = provisioning_active;
+  doc["apSsid"] = provisioning_ap_ssid;
+  doc["ip"] = WiFi.localIP().toString();
+  String payload;
+  serializeJson(doc, payload);
+  wifi_server.send(200, "application/json", payload);
+}
+
+void handle_wifi_submit() {
+  String ssid = wifi_server.arg("ssid");
+  String password = wifi_server.arg("password");
+  ssid.trim();
+  if (ssid.isEmpty()) {
+    wifi_server.send(400, "text/plain; charset=utf-8", "缺少 Wi-Fi 名称");
+    return;
   }
 
-  if (WiFi.status() == WL_CONNECTED) {
-    configTzTime("CST-8", "pool.ntp.org", "time.nist.gov");
-    update_today_key();
-    lv_label_set_text(status_label, "Wi-Fi 已连接");
-    sync_from_cloud();
-  } else {
+  save_wifi_credentials(ssid, password);
+  pending_wifi_ssid = ssid;
+  pending_wifi_password = password;
+  wifi_connect_pending = true;
+
+  wifi_server.send(
+      200,
+      "text/html; charset=utf-8",
+      F("<!doctype html><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<body style=\"font-family:-apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif;background:#fffaf0;color:#171512;padding:28px\">"
+        "<h1>已保存</h1><p>设备正在连接 Wi-Fi。成功后屏幕会自动更新。</p></body>"));
+  set_wifi_setup_visible(true, "Wi-Fi 连接中", ssid.c_str(), "LifeTodo 192.168.4.1");
+}
+
+void configure_wifi_server_routes() {
+  wifi_server.on("/", HTTP_GET, send_wifi_setup_page);
+  wifi_server.on("/api/wifi", HTTP_GET, handle_wifi_status_api);
+  wifi_server.on("/api/wifi", HTTP_POST, handle_wifi_submit);
+  wifi_server.onNotFound([]() {
+    send_wifi_setup_page();
+  });
+}
+
+String device_suffix() {
+  String mac = WiFi.macAddress();
+  mac.replace(":", "");
+  if (mac.length() > 6) {
+    return mac.substring(mac.length() - 6);
+  }
+  return String("SETUP");
+}
+
+void start_wifi_provisioning() {
+  if (provisioning_active) return;
+
+  provisioning_ap_ssid = String("LifeTodo-") + device_suffix();
+  WiFi.mode(WIFI_AP_STA);
+  bool ap_ok = WiFi.softAP(provisioning_ap_ssid.c_str());
+  IPAddress ap_ip = WiFi.softAPIP();
+  dns_server.start(DNS_PORT, "*", ap_ip);
+  configure_wifi_server_routes();
+  wifi_server.begin();
+  provisioning_active = true;
+
+  LOG_SERIAL.printf("WiFi provisioning %s ap=%s ip=%s\n",
+                    ap_ok ? "started" : "failed",
+                    provisioning_ap_ssid.c_str(),
+                    ap_ip.toString().c_str());
+  set_wifi_setup_visible(true, "设备接入", provisioning_ap_ssid.c_str(), "LifeTodo 192.168.4.1");
+  lv_label_set_text(status_label, "Wi-Fi 未连接");
+}
+
+void stop_wifi_provisioning() {
+  if (!provisioning_active) return;
+  wifi_server.stop();
+  dns_server.stop();
+  WiFi.softAPdisconnect(true);
+  provisioning_active = false;
+  set_wifi_setup_visible(false, "", "", "");
+  LOG_SERIAL.println("WiFi provisioning stopped");
+}
+
+bool connect_wifi_with_credentials(const String &ssid, const String &password) {
+  if (ssid.isEmpty()) return false;
+
+  lv_label_set_text(status_label, "Wi-Fi 连接中");
+  set_wifi_setup_visible(provisioning_active, "Wi-Fi 连接中", ssid.c_str(), "LifeTodo 192.168.4.1");
+  LOG_SERIAL.printf("Connecting WiFi ssid=%s\n", ssid.c_str());
+
+  WiFi.mode(provisioning_active ? WIFI_AP_STA : WIFI_STA);
+  WiFi.begin(ssid.c_str(), password.c_str());
+  wifi_connect_started_ms = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - wifi_connect_started_ms < WIFI_CONNECT_TIMEOUT_MS) {
+    handle_wifi_services();
+    lv_timer_handler();
+    delay(50);
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    LOG_SERIAL.printf("WiFi connect failed status=%d\n", WiFi.status());
     lv_label_set_text(status_label, "Wi-Fi 未连接");
+    return false;
+  }
+
+  LOG_SERIAL.printf("WiFi connected ip=%s\n", WiFi.localIP().toString().c_str());
+  stop_wifi_provisioning();
+  configTzTime("CST-8", "pool.ntp.org", "time.nist.gov");
+  update_today_key();
+  lv_label_set_text(status_label, "Wi-Fi 已连接");
+  sync_from_cloud();
+  return true;
+}
+
+bool connect_saved_wifi() {
+  String ssid = pending_wifi_ssid.length() ? pending_wifi_ssid : saved_wifi_ssid();
+  String password = pending_wifi_ssid.length() ? pending_wifi_password : saved_wifi_password();
+  pending_wifi_ssid = "";
+  pending_wifi_password = "";
+  return connect_wifi_with_credentials(ssid, password);
+}
+
+void handle_wifi_services() {
+  if (!provisioning_active) return;
+  dns_server.processNextRequest();
+  wifi_server.handleClient();
+}
+
+void connect_wifi() {
+  if (saved_wifi_ssid().isEmpty()) {
+    start_wifi_provisioning();
+    return;
+  }
+
+  if (!connect_saved_wifi()) {
+    start_wifi_provisioning();
   }
 }
 
@@ -808,6 +1057,7 @@ void build_ui() {
 
   build_task_grid();
   build_brightness_controls();
+  build_wifi_setup_panel();
 
   lv_obj_t *footer = lv_label_create(root);
   lv_label_set_text(footer, "LifeTodo device  lifetodo.xyz");
@@ -875,6 +1125,11 @@ void setup() {
 
 void loop() {
   lv_timer_handler();
+  handle_wifi_services();
+  if (wifi_connect_pending) {
+    wifi_connect_pending = false;
+    connect_saved_wifi();
+  }
   if (millis() - last_heartbeat_ms > 5000) {
     LOG_SERIAL.printf("Heartbeat heap=%u psram=%u wifi=%d remaining=%u\n",
                       ESP.getFreeHeap(), ESP.getFreePsram(), WiFi.status(), remaining_count());
