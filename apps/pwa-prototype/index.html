@@ -16,7 +16,7 @@
           <div>
             <p class="eyebrow">LifeTodo</p>
             <h1>今天</h1>
-            <p class="sync-mode" data-sync-mode>连接中</p>
+            <p class="sync-mode"><span data-sync-mode>连接中</span> · <span data-home-id>demo-home</span></p>
           </div>
           <button class="icon-button" id="resetData" type="button" aria-label="重置数据" title="重置数据">↺</button>
         </header>
@@ -94,6 +94,7 @@
         </section>
 
         <section class="view" id="deviceView">
+          <div class="device-tools" id="deviceTools"></div>
           <div class="device-frame">
             <div class="device-screen" id="deviceScreen"></div>
           </div>

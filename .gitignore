@@ -9,4 +9,5 @@ npm-debug.log*
 .venv-platformio/
 
 firmware/esp32-touch-lcd-4.3/.pio/
+firmware/esp32-touch-lcd-4.3/lib/
 firmware/esp32-touch-lcd-4.3/include/app_config.h

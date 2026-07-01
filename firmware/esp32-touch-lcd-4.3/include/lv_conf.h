@@ -12,8 +12,10 @@
 #define LV_TICK_CUSTOM_SYS_TIME_EXPR (millis())
 
 #define LV_USE_BTN 1
+#define LV_USE_BAR 1
 #define LV_USE_LABEL 1
 #define LV_USE_OBJ 1
+#define LV_USE_SLIDER 1
 #define LV_USE_FLEX 1
 #define LV_USE_GRID 1
 #define LV_USE_STYLE 1
@@ -24,3 +26,4 @@
 #define LV_FONT_MONTSERRAT_18 1
 #define LV_FONT_MONTSERRAT_24 1
 #define LV_FONT_MONTSERRAT_32 1
+#define LV_FONT_SIMSUN_16_CJK 1

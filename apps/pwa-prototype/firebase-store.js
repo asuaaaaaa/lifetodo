@@ -17,6 +17,10 @@ let authApi;
 let db;
 let user;
 
+export function getHomeId() {
+  return homeId;
+}
+
 export async function createStore(seed, onChange = () => {}) {
   const local = createLocalStore(seed);
 
@@ -80,6 +84,10 @@ function createLocalStore(seed) {
       state.members.push(member);
       writeLocalState(state);
     },
+    async updateMember(memberId, patch) {
+      state.members = state.members.map((member) => (member.id === memberId ? { ...member, ...patch } : member));
+      writeLocalState(state);
+    },
     async deleteMember(memberId) {
       state.members = state.members.filter((member) => member.id !== memberId);
       writeLocalState(state);
@@ -125,6 +133,13 @@ function createCloudStore(local, onChange) {
     async addMember(member) {
       local.getState().members.push(member);
       await writeCloudState(local.getState(), "addMember");
+      writeLocalState(local.getState());
+    },
+    async updateMember(memberId, patch) {
+      local.getState().members = local
+        .getState()
+        .members.map((member) => (member.id === memberId ? { ...member, ...patch } : member));
+      await writeCloudState(local.getState(), "updateMember");
       writeLocalState(local.getState());
     },
     async deleteMember(memberId) {

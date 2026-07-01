@@ -9,6 +9,7 @@ This is the first hardware GUI prototype for the Waveshare `ESP32-S3-Touch-LCD-4
 - Renders a LifeTodo "today" screen with LVGL.
 - Lets the user tap task cards to toggle done/pending.
 - Shows Wi-Fi status when credentials are configured.
+- Prints startup, heartbeat, touch coordinate, and task toggle diagnostics over the USB-UART port.
 
 The first version uses local demo tasks so the screen and touch can be verified before the device API is added.
 
@@ -31,7 +32,25 @@ On macOS, the board should appear as a serial device such as:
 /dev/cu.wchusbserial*
 ```
 
+The tested board appeared as:
+
+```text
+/dev/cu.usbmodem5B790235471
+```
+
+The board exposes a WCH USB-UART bridge, so firmware diagnostics use the hardware UART (`Serial0`) when USB CDC is enabled.
+
 If no serial port appears, use the USB-UART Type-C port on the board. Waveshare notes that the board supports boot mode by holding `BOOT`, connecting USB, then releasing `BOOT`; press `RESET` after flashing.
+
+## Verified Hardware Loop
+
+On the connected board, the prototype has been verified to:
+
+- Boot without reboot loops.
+- Detect 8 MB PSRAM.
+- Render the LVGL task screen after a short red/green/blue LCD diagnostic flash.
+- Report GT911 touch coordinates.
+- Toggle task cards and update the remaining count.
 
 ## Wi-Fi
 

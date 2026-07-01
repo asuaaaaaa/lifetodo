@@ -1,33 +1,32 @@
-import { createStore } from "./firebase-store.js";
+import { createStore, getHomeId } from "./firebase-store.js";
 
 const todayKey = new Date().toISOString().slice(0, 10);
 const isDevicePage = document.body.classList.contains("device-only");
 
 const seed = {
   members: [
-    { id: "mom", name: "妈妈", color: "#ef7f65" },
-    { id: "dad", name: "爸爸", color: "#5d8fb4" },
-    { id: "kid", name: "小朋友", color: "#6ba36f" }
+    { id: "piggy", name: "猪猪", color: "#ef7f65" },
+    { id: "xingyue", name: "星月", color: "#5d8fb4" }
   ],
   tasks: [
     {
       id: "litter",
       title: "铲猫砂盆",
-      assigneeId: "mom",
+      assigneeId: "piggy",
       recurrence: { type: "intervalDays", every: 3, anchorDate: todayKey },
       label: "每 3 天"
     },
     {
       id: "toilet",
       title: "清洁马桶",
-      assigneeId: "dad",
+      assigneeId: "xingyue",
       recurrence: { type: "monthlyDate", day: new Date().getDate() },
       label: "每月 1 日"
     },
     {
       id: "plants",
       title: "给阳台植物浇水",
-      assigneeId: "kid",
+      assigneeId: "piggy",
       recurrence: { type: "intervalDays", every: 2, anchorDate: todayKey },
       label: "每 2 天"
     }
@@ -48,9 +47,28 @@ bootstrap();
 
 async function bootstrap() {
   store = await createStore(seed, () => render());
+  await migrateDefaultMembers();
   bindEvents();
   updateRecurrenceFields();
   render();
+}
+
+async function migrateDefaultMembers() {
+  const current = state();
+  const defaultMemberIds = current.members.map((member) => member.id).sort().join(",");
+  if (defaultMemberIds !== "dad,kid,mom") {
+    return;
+  }
+
+  await store.updateMember("mom", { id: "piggy", name: "猪猪", color: "#ef7f65" });
+  await store.updateMember("dad", { id: "xingyue", name: "星月", color: "#5d8fb4" });
+  await store.deleteMember("kid");
+  await Promise.all(
+    current.tasks.map((task) => {
+      const assigneeId = task.assigneeId === "dad" ? "xingyue" : "piggy";
+      return store.updateTask(task.id, { assigneeId });
+    })
+  );
 }
 
 function bindEvents() {
@@ -187,6 +205,9 @@ function renderSyncMode() {
   document.querySelectorAll("[data-sync-mode]").forEach((item) => {
     item.textContent = store.mode === "firebase" ? "Firebase 已连接" : "本地模式";
   });
+  document.querySelectorAll("[data-home-id]").forEach((item) => {
+    item.textContent = getHomeId();
+  });
 }
 
 function renderAssigneeOptions() {
@@ -283,6 +304,10 @@ function renderMembers() {
             <div class="member-name"><span class="dot" style="--accent:${member.color}"></span>${escapeHtml(member.name)}</div>
             <span class="task-meta">${taskCount} 个任务</span>
           </div>
+          <label class="inline-field">
+            <span>标签颜色</span>
+            <input type="color" value="${escapeHtml(member.color)}" data-member-action="color" data-member-id="${member.id}">
+          </label>
           <div class="row-actions">
             <button class="danger-button" type="button" data-member-action="delete" data-member-id="${member.id}" ${taskCount ? "disabled" : ""}>
               ${taskCount ? "有任务不可删" : "删除"}
@@ -300,6 +325,7 @@ function renderDevice() {
   if (!screen) return;
   const due = todaysTasks();
   const remaining = due.filter((task) => !state().completions[completionKey(task.id)]).length;
+  const deviceUrl = `${location.origin}${location.pathname.replace(/index\.html$/, "")}device.html?home=${encodeURIComponent(getHomeId())}`;
   screen.innerHTML = `
     <div class="device-head">
       <strong>今日</strong>
@@ -315,6 +341,20 @@ function renderDevice() {
       <strong>${remaining} 未完成</strong>
     </div>
   `;
+
+  const deviceTools = document.querySelector("#deviceTools");
+  if (deviceTools) {
+    deviceTools.innerHTML = `
+      <div class="device-link">
+        <span>家庭</span>
+        <strong>${escapeHtml(getHomeId())}</strong>
+      </div>
+      <label class="device-url">
+        <span>设备页地址</span>
+        <input readonly value="${escapeHtml(deviceUrl)}">
+      </label>
+    `;
+  }
 }
 
 function devicePerson(member, tasks) {
@@ -358,6 +398,13 @@ function bindTaskManagementButtons() {
 }
 
 function bindMemberManagementButtons() {
+  document.querySelectorAll("[data-member-action='color']").forEach((input) => {
+    input.addEventListener("change", async () => {
+      await store.updateMember(input.dataset.memberId, { color: input.value });
+      render();
+    });
+  });
+
   document.querySelectorAll("[data-member-action='delete']").forEach((button) => {
     button.addEventListener("click", async () => {
       if (button.disabled) return;
