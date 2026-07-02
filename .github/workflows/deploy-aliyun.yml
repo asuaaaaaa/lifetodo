@@ -23,7 +23,7 @@ jobs:
       - name: Check JavaScript
         run: |
           node --check apps/pwa-prototype/app.js
-          node --check apps/pwa-prototype/firebase-store.js
+          node --check apps/pwa-prototype/lifetodo-store.js
           node --check scripts/prepare-static-deploy.mjs
 
       - name: Build static site
