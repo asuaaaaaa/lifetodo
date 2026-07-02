@@ -8,9 +8,9 @@
 
 - `apps/pwa-prototype/`: 零依赖 H5 原型，包含手机管理视图和设备屏视图
 - `docs/product-requirements.md`: 产品需求和阶段规划
-- `docs/architecture.md`: Firebase、阿里云、ESP32 的系统架构
-- `docs/firebase-schema.md`: Firestore 数据模型草案
-- `docs/firebase-setup.md`: Firebase 接入和开发期规则
+- `docs/architecture.md`: 飞书多维表格、LifeTodo API、ESP32 的系统架构
+- `docs/lark-base-schema.md`: 飞书多维表格数据模型
+- `docs/lark-base-setup.md`: 飞书多维表格接入和运行说明
 - `docs/esp32-s3-touch-lcd-4.3.md`: ESP32-S3-Touch-LCD-4.3 设备端方案
 - `docs/apk-packaging.md`: H5 包装 APK 的建议路线
 - `docs/aliyun-deploy.md`: `lifetodo.xyz` 阿里云部署清单
@@ -18,7 +18,6 @@
 - `docs/project-status.md`: 当前完成项和下一步
 - `config/app-config.json`: 当前域名和入口 URL 配置
 - `scripts/prepare-static-deploy.mjs`: 生成静态部署目录
-- `infra/firestore.rules`: 开发期 Firestore Rules
 - `design-system/`: 从 `recent.design` 抽取的 starter tokens
 
 ## 本地预览
@@ -47,11 +46,11 @@ node scripts/prepare-static-deploy.mjs
 
 然后把 `dist/site` 上传到阿里云 OSS/CDN 或 Nginx 站点根目录。详见 `docs/aliyun-deploy.md`。
 
-## Firebase
+## 飞书多维表格
 
-原型会自动尝试连接 Firebase。成功时页面显示 `Firebase 已连接`，失败时回落到 `localStorage` 并显示 `本地模式`。
+原型通过本项目的 Node API 访问飞书多维表格。成功时页面显示 `飞书多维表格已连接`，失败时回落到 `localStorage` 并显示 `本地模式`。
 
-需要在 Firebase Console 开启 Anonymous Auth，并参考 `docs/firebase-setup.md` 设置开发期 Firestore Rules。
+运行前需要用 `lark-cli` 创建/配置 Base，并设置 `LIFETODO_LARK_BASE_TOKEN` 和 `LIFETODO_LARK_TODO_TABLE_ID`。详见 `docs/lark-base-setup.md`。
 
 ## 设计记录
 

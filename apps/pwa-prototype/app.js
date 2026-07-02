@@ -1,7 +1,8 @@
-import { createStore, getHomeId } from "./firebase-store.js";
+import { createStore, getHomeId } from "./lifetodo-store.js";
 
 const todayKey = new Date().toISOString().slice(0, 10);
 const isDevicePage = document.body.classList.contains("device-only");
+const currentDeviceId = new URLSearchParams(location.search).get("device");
 
 const seed = {
   members: [
@@ -31,6 +32,16 @@ const seed = {
       label: "每 2 天"
     }
   ],
+  devices: [
+    {
+      id: "entry-screen",
+      name: "玄关屏",
+      location: "门口",
+      model: "ESP32-S3-Touch-LCD-4.3",
+      status: "offline",
+      lastSeenAt: null
+    }
+  ],
   completions: {}
 };
 
@@ -50,6 +61,7 @@ async function bootstrap() {
   await migrateDefaultMembers();
   bindEvents();
   updateRecurrenceFields();
+  startDeviceHeartbeat();
   render();
 }
 
@@ -112,6 +124,23 @@ function bindEvents() {
       id: crypto.randomUUID(),
       name: String(form.get("name")).trim(),
       color: String(form.get("color") || "#ef7f65")
+    });
+    event.currentTarget.reset();
+    render();
+  });
+
+  document.querySelector("#deviceForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const deviceId = String(form.get("deviceId")).trim();
+    if (!deviceId) return;
+    await store.addDevice({
+      id: deviceId,
+      name: String(form.get("name")).trim() || deviceId,
+      location: String(form.get("location")).trim(),
+      model: "ESP32-S3-Touch-LCD-4.3",
+      status: "offline",
+      lastSeenAt: null
     });
     event.currentTarget.reset();
     render();
@@ -203,7 +232,7 @@ function render() {
 
 function renderSyncMode() {
   document.querySelectorAll("[data-sync-mode]").forEach((item) => {
-    item.textContent = store.mode === "firebase" ? "Firebase 已连接" : "本地模式";
+    item.textContent = store.mode === "lark" ? "飞书多维表格已连接" : "本地模式";
   });
   document.querySelectorAll("[data-home-id]").forEach((item) => {
     item.textContent = getHomeId();
@@ -321,11 +350,18 @@ function renderMembers() {
 }
 
 function renderDevice() {
+  if (isDevicePage) {
+    renderDeviceScreen();
+    return;
+  }
+  renderDeviceManager();
+}
+
+function renderDeviceScreen() {
   const screen = document.querySelector("#deviceScreen");
   if (!screen) return;
   const due = todaysTasks();
   const remaining = due.filter((task) => !state().completions[completionKey(task.id)]).length;
-  const deviceUrl = `${location.origin}${location.pathname.replace(/index\.html$/, "")}device.html?home=${encodeURIComponent(getHomeId())}`;
   screen.innerHTML = `
     <div class="device-head">
       <strong>今日</strong>
@@ -337,24 +373,71 @@ function renderDevice() {
         .join("")}
     </div>
     <div class="device-foot">
-      <span>玄关屏 · <span data-sync-mode>${store.mode === "firebase" ? "Firebase 已连接" : "本地模式"}</span></span>
+      <span>玄关屏 · <span data-sync-mode>${store.mode === "lark" ? "飞书多维表格已连接" : "本地模式"}</span></span>
       <strong>${remaining} 未完成</strong>
     </div>
   `;
+}
 
-  const deviceTools = document.querySelector("#deviceTools");
-  if (deviceTools) {
-    deviceTools.innerHTML = `
-      <div class="device-link">
-        <span>家庭</span>
-        <strong>${escapeHtml(getHomeId())}</strong>
+function renderDeviceManager() {
+  const container = document.querySelector("#deviceManager");
+  if (!container) return;
+  const devices = state().devices || [];
+  if (!devices.length) {
+    container.innerHTML = `<section class="member-section"><p class="task-meta">还没有接入设备。添加设备 ID 后，设备访问对应地址就会显示在线状态。</p></section>`;
+    return;
+  }
+  container.innerHTML = devices.map(deviceCard).join("");
+  bindDeviceManagementButtons();
+}
+
+function deviceCard(device) {
+  const online = isDeviceOnline(device);
+  const deviceUrl = `${location.origin}${location.pathname.replace(/index\.html$/, "")}device.html?home=${encodeURIComponent(getHomeId())}&device=${encodeURIComponent(device.id)}`;
+  return `
+    <section class="member-section device-card">
+      <div class="member-head">
+        <div class="member-name">
+          <span class="status-dot ${online ? "online" : "offline"}"></span>
+          ${escapeHtml(device.name)}
+        </div>
+        <span class="status-pill ${online ? "online" : "offline"}">${online ? "在线" : "离线"}</span>
       </div>
-      <label class="device-url">
-        <span>设备页地址</span>
+      <label class="device-name-field">
+        <span>设备名称</span>
+        <input value="${escapeHtml(device.name)}" data-device-action="rename" data-device-id="${escapeHtml(device.id)}">
+      </label>
+      <div class="device-meta">ID: ${escapeHtml(device.id)}</div>
+      <div class="device-meta">位置: ${escapeHtml(device.location || "未设置")}</div>
+      <div class="device-meta">型号: ${escapeHtml(device.model || "未设置")}</div>
+      <div class="device-meta">最后在线: ${escapeHtml(formatLastSeen(device.lastSeenAt))}</div>
+      <label class="device-url compact">
+        <span>设备访问地址</span>
         <input readonly value="${escapeHtml(deviceUrl)}">
       </label>
-    `;
+      <div class="row-actions">
+        <button class="danger-button" type="button" data-device-action="delete" data-device-id="${escapeHtml(device.id)}">删除</button>
+      </div>
+    </section>
+  `;
+}
+
+function isDeviceOnline(device) {
+  if (!device.lastSeenAt) {
+    return device.status === "online";
   }
+  const lastSeen = new Date(device.lastSeenAt).getTime();
+  return Number.isFinite(lastSeen) && Date.now() - lastSeen < 2 * 60 * 1000;
+}
+
+function formatLastSeen(value) {
+  if (!value) return "从未连接";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "未知";
+  const diffMinutes = Math.floor((Date.now() - date.getTime()) / 60000);
+  if (diffMinutes < 1) return "刚刚";
+  if (diffMinutes < 60) return `${diffMinutes} 分钟前`;
+  return date.toLocaleString("zh-CN", { hour12: false });
 }
 
 function devicePerson(member, tasks) {
@@ -412,6 +495,46 @@ function bindMemberManagementButtons() {
       render();
     });
   });
+}
+
+function bindDeviceManagementButtons() {
+  document.querySelectorAll("[data-device-action='rename']").forEach((input) => {
+    input.addEventListener("change", async () => {
+      await store.updateDevice(input.dataset.deviceId, { name: input.value.trim() || input.dataset.deviceId });
+      render();
+    });
+  });
+
+  document.querySelectorAll("[data-device-action='delete']").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await store.deleteDevice(button.dataset.deviceId);
+      render();
+    });
+  });
+}
+
+function startDeviceHeartbeat() {
+  if (!isDevicePage || !currentDeviceId) return;
+  const heartbeat = async () => {
+    const patch = {
+      status: "online",
+      lastSeenAt: new Date().toISOString()
+    };
+    const existing = state().devices?.find((device) => device.id === currentDeviceId);
+    if (existing) {
+      await store.updateDevice(currentDeviceId, patch);
+      return;
+    }
+    await store.addDevice({
+      id: currentDeviceId,
+      name: currentDeviceId,
+      location: "",
+      model: "ESP32-S3-Touch-LCD-4.3",
+      ...patch
+    });
+  };
+  heartbeat();
+  setInterval(heartbeat, 60000);
 }
 
 function escapeHtml(value) {

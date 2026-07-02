@@ -25,14 +25,6 @@ LV_FONT_DECLARE(lifetodo_pingfang_28);
 #define LIFETODO_BASE_URL "https://lifetodo.xyz"
 #endif
 
-#ifndef LIFETODO_FIREBASE_PROJECT_ID
-#define LIFETODO_FIREBASE_PROJECT_ID "lifetodo-47399"
-#endif
-
-#ifndef LIFETODO_FIREBASE_API_KEY
-#define LIFETODO_FIREBASE_API_KEY "AIzaSyAF_WBUeMoqmyIY4YzepdF7WFHjgYy2Rms"
-#endif
-
 #if ARDUINO_USB_CDC_ON_BOOT
 #define LOG_SERIAL Serial0
 #else
@@ -54,10 +46,47 @@ constexpr uint8_t EXIO_LCD_RST = 3;
 constexpr uint32_t TASK_CLICK_REARM_RELEASE_MS = 220;
 constexpr uint32_t CLOUD_SYNC_INTERVAL_MS = 60000;
 constexpr uint32_t WIFI_CONNECT_TIMEOUT_MS = 12000;
+constexpr uint32_t CLOUD_SYNC_RETRY_DELAY_MS = 1200;
+constexpr uint32_t TIME_SYNC_TIMEOUT_MS = 9000;
 constexpr uint16_t DNS_PORT = 53;
+constexpr uint8_t CLOUD_SYNC_ATTEMPTS = 3;
 constexpr size_t MAX_TASKS = 4;
 constexpr size_t MAX_COMPLETIONS = 40;
 uint8_t ch422g_output = 0xff;
+
+const char GOOGLE_GTS_ROOT_R1[] PROGMEM = R"EOF(
+-----BEGIN CERTIFICATE-----
+MIIFYjCCBEqgAwIBAgIQd70NbNs2+RrqIQ/E8FjTDTANBgkqhkiG9w0BAQsFADBX
+MQswCQYDVQQGEwJCRTEZMBcGA1UEChMQR2xvYmFsU2lnbiBudi1zYTEQMA4GA1UE
+CxMHUm9vdCBDQTEbMBkGA1UEAxMSR2xvYmFsU2lnbiBSb290IENBMB4XDTIwMDYx
+OTAwMDA0MloXDTI4MDEyODAwMDA0MlowRzELMAkGA1UEBhMCVVMxIjAgBgNVBAoT
+GUdvb2dsZSBUcnVzdCBTZXJ2aWNlcyBMTEMxFDASBgNVBAMTC0dUUyBSb290IFIx
+MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAthECix7joXebO9y/lD63
+ladAPKH9gvl9MgaCcfb2jH/76Nu8ai6Xl6OMS/kr9rH5zoQdsfnFl97vufKj6bwS
+iV6nqlKr+CMny6SxnGPb15l+8Ape62im9MZaRw1NEDPjTrETo8gYbEvs/AmQ351k
+KSUjB6G00j0uYODP0gmHu81I8E3CwnqIiru6z1kZ1q+PsAewnjHxgsHA3y6mbWwZ
+DrXYfiYaRQM9sHmklCitD38m5agI/pboPGiUU+6DOogrFZYJsuB6jC511pzrp1Zk
+j5ZPaK49l8KEj8C8QMALXL32h7M1bKwYUH+E4EzNktMg6TO8UpmvMrUpsyUqtEj5
+cuHKZPfmghCN6J3Cioj6OGaK/GP5Afl4/Xtcd/p2h/rs37EOeZVXtL0m79YB0esW
+CruOC7XFxYpVq9Os6pFLKcwZpDIlTirxZUTQAs6qzkm06p98g7BAe+dDq6dso499
+iYH6TKX/1Y7DzkvgtdizjkXPdsDtQCv9Uw+wp9U7DbGKogPeMa3Md+pvez7W35Ei
+Eua++tgy/BBjFFFy3l3WFpO9KWgz7zpm7AeKJt8T11dleCfeXkkUAKIAf5qoIbap
+sZWwpbkNFhHax2xIPEDgfg1azVY80ZcFuctL7TlLnMQ/0lUTbiSw1nH69MG6zO0b
+9f6BQdgAmD06yK56mDcYBZUCAwEAAaOCATgwggE0MA4GA1UdDwEB/wQEAwIBhjAP
+BgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBTkrysmcRorSCeFL1JmLO/wiRNxPjAf
+BgNVHSMEGDAWgBRge2YaRQ2XyolQL30EzTSo//z9SzBgBggrBgEFBQcBAQRUMFIw
+JQYIKwYBBQUHMAGGGWh0dHA6Ly9vY3NwLnBraS5nb29nL2dzcjEwKQYIKwYBBQUH
+MAKGHWh0dHA6Ly9wa2kuZ29vZy9nc3IxL2dzcjEuY3J0MDIGA1UdHwQrMCkwJ6Al
+oCOGIWh0dHA6Ly9jcmwucGtpLmdvb2cvZ3NyMS9nc3IxLmNybDA7BgNVHSAENDAy
+MAgGBmeBDAECATAIBgZngQwBAgIwDQYLKwYBBAHWeQIFAwIwDQYLKwYBBAHWeQIF
+AwMwDQYJKoZIhvcNAQELBQADggEBADSkHrEoo9C0dhemMXoh6dFSPsjbdBZBiLg9
+NR3t5P+T4Vxfq7vqfM/b5A3Ri1fyJm9bvhdGaJQ3b2t6yMAYN/olUazsaL+yyEn9
+WprKASOshIArAoyZl+tJaox118fessmXn1hIVw41oeQa1v1vg4Fv74zPl6/AhSrw
+9U5pCZEt4Wi4wStz6dTZ/CLANx8LZh1J7QJVj2fhMtfTJr9w4z30Z209fOU0iOMy
++qduBmpvvYuR7hZL6Dupszfnw0Skfths18dG9ZKb59UhvmaSGZRVbNQpsg3BZlvi
+d0lIKO2d1xozclOzgjXPYovJJIultzkMu34qQb9Sz/yilrbCgj8=
+-----END CERTIFICATE-----
+)EOF";
 
 // Waveshare ESP32-S3-Touch-LCD-4.3 RGB and touch pins.
 // Source: Waveshare wiki pinout for ESP32-S3-Touch-LCD-4.3.
@@ -90,15 +119,22 @@ lv_obj_t *brightness_panel;
 lv_obj_t *brightness_slider;
 lv_obj_t *brightness_value_label;
 lv_obj_t *brightness_gesture_zone;
+lv_obj_t *control_wifi_status_label;
+lv_obj_t *control_sync_status_label;
 lv_obj_t *wifi_setup_panel;
 lv_obj_t *wifi_setup_title;
 lv_obj_t *wifi_setup_body;
 lv_obj_t *wifi_setup_hint;
 lv_obj_t *wifi_setup_steps;
+lv_obj_t *wifi_setup_close_btn;
+lv_obj_t *wifi_disconnect_btn;
+lv_obj_t *wifi_reconnect_btn;
+lv_obj_t *wifi_reprovision_btn;
 uint32_t last_heartbeat_ms = 0;
 uint32_t last_touch_log_ms = 0;
 uint32_t last_cloud_sync_ms = 0;
 uint32_t wifi_connect_started_ms = 0;
+int last_wifi_status_code = -1;
 bool brightness_panel_open = false;
 bool provisioning_active = false;
 bool wifi_connect_pending = false;
@@ -155,12 +191,19 @@ void apply_task_view(size_t index);
 void update_summary();
 void render_tasks();
 bool sync_from_cloud();
-bool push_completions_to_cloud();
+bool push_completion_to_cloud(const char *task_id, bool completed);
 void set_wifi_setup_visible(bool visible, const char *title, const char *body, const char *hint);
 void start_wifi_provisioning();
 void stop_wifi_provisioning();
 bool connect_saved_wifi();
 void handle_wifi_services();
+String saved_wifi_ssid();
+void wifi_setup_close_event(lv_event_t *event);
+void wifi_disconnect_event(lv_event_t *event);
+void wifi_reconnect_event(lv_event_t *event);
+void wifi_reprovision_event(lv_event_t *event);
+void show_wifi_status_panel();
+void refresh_wifi_state_labels();
 
 void set_cjk_font(lv_obj_t *obj) {
   lv_obj_set_style_text_font(obj, &lifetodo_pingfang_24, 0);
@@ -234,13 +277,30 @@ uint32_t parse_color(const char *value, uint32_t fallback) {
   return strtoul(hex, nullptr, 16);
 }
 
-String firestore_document_url() {
-  return String("https://firestore.googleapis.com/v1/projects/") +
-         LIFETODO_FIREBASE_PROJECT_ID +
-         "/databases/(default)/documents/homes/" +
-         LIFETODO_HOME_ID +
-         "?key=" +
-         LIFETODO_FIREBASE_API_KEY;
+String api_url(const char *path) {
+  String base = LIFETODO_BASE_URL;
+  if (base.endsWith("/")) {
+    base.remove(base.length() - 1);
+  }
+  return base + path;
+}
+
+String state_api_url() {
+  return api_url("/api/state?home=") + LIFETODO_HOME_ID;
+}
+
+String completions_api_url() {
+  return api_url("/api/completions?home=") + LIFETODO_HOME_ID;
+}
+
+bool begin_lifetodo_http(HTTPClient &http, WiFiClient &plain_client, WiFiClientSecure &secure_client, const String &url) {
+  if (url.startsWith("https://")) {
+    secure_client.setInsecure();
+    secure_client.setHandshakeTimeout(20);
+    secure_client.setTimeout(20);
+    return http.begin(secure_client, url);
+  }
+  return http.begin(plain_client, url);
 }
 
 bool update_today_key() {
@@ -250,6 +310,20 @@ bool update_today_key() {
   }
   strftime(today_key, sizeof(today_key), "%Y-%m-%d", &timeinfo);
   return true;
+}
+
+bool wait_for_time_sync() {
+  uint32_t start = millis();
+  while (millis() - start < TIME_SYNC_TIMEOUT_MS) {
+    if (update_today_key()) {
+      LOG_SERIAL.printf("Time synced today=%s\n", today_key);
+      return true;
+    }
+    lv_timer_handler();
+    delay(250);
+  }
+  LOG_SERIAL.println("Time sync timed out");
+  return false;
 }
 
 time_t parse_date(const char *date) {
@@ -293,19 +367,18 @@ String task_completion_key(const char *task_id) {
 }
 
 bool is_due_today(JsonObject task_fields) {
-  if (task_fields["enabled"]["booleanValue"].is<bool>() &&
-      !task_fields["enabled"]["booleanValue"].as<bool>()) {
+  if (task_fields["enabled"].is<bool>() && !task_fields["enabled"].as<bool>()) {
     return false;
   }
 
-  JsonObject recurrence = task_fields["recurrence"]["mapValue"]["fields"].as<JsonObject>();
-  const char *type = recurrence["type"]["stringValue"] | "";
+  JsonObject recurrence = task_fields["recurrence"].as<JsonObject>();
+  const char *type = recurrence["type"] | "";
   time_t today = parse_date(today_key);
   if (today == 0) return true;
 
   if (strcmp(type, "intervalDays") == 0) {
-    int every = recurrence["every"]["integerValue"] | 1;
-    const char *anchor = recurrence["anchorDate"]["stringValue"] | today_key;
+    int every = recurrence["every"] | 1;
+    const char *anchor = recurrence["anchorDate"] | today_key;
     time_t anchor_time = parse_date(anchor);
     if (anchor_time == 0 || every <= 0) return false;
     long diff = static_cast<long>((today - anchor_time) / 86400);
@@ -315,14 +388,14 @@ bool is_due_today(JsonObject task_fields) {
   struct tm today_tm = {};
   localtime_r(&today, &today_tm);
   if (strcmp(type, "monthlyDate") == 0) {
-    int day = recurrence["day"]["integerValue"] | 1;
+    int day = recurrence["day"] | 1;
     return today_tm.tm_mday == day;
   }
 
   if (strcmp(type, "weekly") == 0) {
-    JsonArray days = recurrence["daysOfWeek"]["arrayValue"]["values"].as<JsonArray>();
+    JsonArray days = recurrence["daysOfWeek"].as<JsonArray>();
     for (JsonVariant day : days) {
-      if ((day["integerValue"] | -1) == today_tm.tm_wday) return true;
+      if ((day | -1) == today_tm.tm_wday) return true;
     }
     return false;
   }
@@ -332,10 +405,10 @@ bool is_due_today(JsonObject task_fields) {
 
 const char *member_name_for(const char *member_id, JsonArray members, const char *fallback) {
   for (JsonVariant member : members) {
-    JsonObject fields = member["mapValue"]["fields"].as<JsonObject>();
-    const char *id = fields["id"]["stringValue"] | "";
+    JsonObject fields = member.as<JsonObject>();
+    const char *id = fields["id"] | "";
     if (strcmp(id, member_id) == 0) {
-      return fields["name"]["stringValue"] | fallback;
+      return fields["name"] | fallback;
     }
   }
   return fallback;
@@ -343,18 +416,17 @@ const char *member_name_for(const char *member_id, JsonArray members, const char
 
 uint32_t member_color_for(const char *member_id, JsonArray members, uint32_t fallback) {
   for (JsonVariant member : members) {
-    JsonObject fields = member["mapValue"]["fields"].as<JsonObject>();
-    const char *id = fields["id"]["stringValue"] | "";
+    JsonObject fields = member.as<JsonObject>();
+    const char *id = fields["id"] | "";
     if (strcmp(id, member_id) == 0) {
-      return parse_color(fields["color"]["stringValue"] | "", fallback);
+      return parse_color(fields["color"] | "", fallback);
     }
   }
   return fallback;
 }
 
-void read_completion_keys(JsonObject fields) {
+void read_completion_keys(JsonObject completions) {
   completion_count = 0;
-  JsonObject completions = fields["completions"]["mapValue"]["fields"].as<JsonObject>();
   for (JsonPair item : completions) {
     if (completion_count >= MAX_COMPLETIONS) break;
     copy_text(completion_keys[completion_count], sizeof(completion_keys[completion_count]), item.key().c_str());
@@ -366,28 +438,28 @@ bool apply_cloud_document(const String &payload) {
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, payload);
   if (err) {
-    LOG_SERIAL.printf("Firestore JSON parse failed: %s\n", err.c_str());
+    LOG_SERIAL.printf("LifeTodo API JSON parse failed: %s\n", err.c_str());
     return false;
   }
 
-  JsonObject fields = doc["fields"].as<JsonObject>();
-  if (fields.isNull()) return false;
+  JsonObject state = doc["state"].as<JsonObject>();
+  if (state.isNull()) return false;
 
-  JsonArray members = fields["members"]["arrayValue"]["values"].as<JsonArray>();
-  JsonArray cloud_tasks = fields["tasks"]["arrayValue"]["values"].as<JsonArray>();
-  read_completion_keys(fields);
+  JsonArray members = state["members"].as<JsonArray>();
+  JsonArray cloud_tasks = state["tasks"].as<JsonArray>();
+  read_completion_keys(state["completions"].as<JsonObject>());
 
   size_t next_count = 0;
   for (JsonVariant item : cloud_tasks) {
     if (next_count >= TASK_COUNT) break;
-    JsonObject task_fields = item["mapValue"]["fields"].as<JsonObject>();
+    JsonObject task_fields = item.as<JsonObject>();
     if (task_fields.isNull() || !is_due_today(task_fields)) continue;
 
     Task &task = tasks[next_count];
-    const char *id = task_fields["id"]["stringValue"] | "";
-    const char *title = task_fields["title"]["stringValue"] | "事项";
-    const char *label = task_fields["label"]["stringValue"] | "";
-    const char *assignee_id = task_fields["assigneeId"]["stringValue"] | "";
+    const char *id = task_fields["id"] | "";
+    const char *title = task_fields["title"] | "事项";
+    const char *label = task_fields["label"] | "";
+    const char *assignee_id = task_fields["assigneeId"] | "";
     String done_key = task_completion_key(id);
 
     copy_text(task.id, sizeof(task.id), id);
@@ -409,85 +481,84 @@ bool apply_cloud_document(const String &payload) {
 
 bool sync_from_cloud() {
   if (WiFi.status() != WL_CONNECTED) return false;
-  update_today_key();
+  wait_for_time_sync();
 
-  WiFiClientSecure client;
-  client.setInsecure();
-  HTTPClient http;
-  String url = firestore_document_url();
-  if (!http.begin(client, url)) {
-    LOG_SERIAL.println("Firestore HTTP begin failed");
-    return false;
+  lv_label_set_text(status_label, "正在同步");
+
+  String url = state_api_url();
+  LOG_SERIAL.printf("LifeTodo API GET url=%s\n", url.c_str());
+  for (uint8_t attempt = 1; attempt <= CLOUD_SYNC_ATTEMPTS; attempt++) {
+    WiFiClient plain_client;
+    WiFiClientSecure client;
+
+    HTTPClient http;
+    http.setTimeout(20000);
+    http.setReuse(false);
+    if (!begin_lifetodo_http(http, plain_client, client, url)) {
+      LOG_SERIAL.printf("LifeTodo API HTTP begin failed attempt=%u\n", attempt);
+      lv_label_set_text(status_label, "同步失败");
+      delay(CLOUD_SYNC_RETRY_DELAY_MS);
+      continue;
+    }
+
+    int code = http.GET();
+    String payload = http.getString();
+    http.end();
+
+    if (code != 200) {
+      LOG_SERIAL.printf("LifeTodo API GET failed attempt=%u code=%d payload=%s\n", attempt, code, payload.c_str());
+      lv_label_set_text(status_label, "同步重试");
+      delay(CLOUD_SYNC_RETRY_DELAY_MS);
+      continue;
+    }
+
+    bool ok = apply_cloud_document(payload);
+    if (ok) {
+      update_summary();
+      render_tasks();
+      lv_label_set_text(status_label, "飞书已连接");
+      return true;
+    }
+
+    lv_label_set_text(status_label, "同步重试");
+    delay(CLOUD_SYNC_RETRY_DELAY_MS);
   }
 
-  int code = http.GET();
-  String payload = http.getString();
-  http.end();
-  if (code != 200) {
-    LOG_SERIAL.printf("Firestore GET failed code=%d payload=%s\n", code, payload.c_str());
-    return false;
-  }
-
-  bool ok = apply_cloud_document(payload);
-  if (ok) {
-    update_summary();
-    render_tasks();
-    lv_label_set_text(status_label, "Firebase 已连接");
-  }
-  return ok;
+  lv_label_set_text(status_label, "同步失败");
+  return false;
 }
 
-String completion_value_json(const char *key) {
-  String key_string(key);
-  int separator = key_string.lastIndexOf('_');
-  String task_id = separator > 0 ? key_string.substring(0, separator) : key_string;
-  String date = separator > 0 ? key_string.substring(separator + 1) : String(today_key);
-  String completed_at = date + "T00:00:00.000Z";
-
-  JsonDocument value;
-  JsonObject fields = value["mapValue"]["fields"].to<JsonObject>();
-  fields["taskId"]["stringValue"] = task_id;
-  fields["date"]["stringValue"] = date;
-  fields["source"]["stringValue"] = "device-esp32";
-  fields["completedAt"]["stringValue"] = completed_at;
-
-  String output;
-  serializeJson(value, output);
-  return output;
-}
-
-bool push_completions_to_cloud() {
+bool push_completion_to_cloud(const char *task_id, bool completed) {
   if (WiFi.status() != WL_CONNECTED) return false;
 
   JsonDocument body;
-  JsonObject completion_fields = body["fields"]["completions"]["mapValue"]["fields"].to<JsonObject>();
-  for (size_t i = 0; i < completion_count; i++) {
-    JsonDocument completion;
-    deserializeJson(completion, completion_value_json(completion_keys[i]));
-    completion_fields[completion_keys[i]] = completion.as<JsonVariant>();
-  }
+  body["taskId"] = task_id;
+  body["date"] = today_key;
+  body["completed"] = completed;
+  body["source"] = "device-esp32";
 
   String payload;
   serializeJson(body, payload);
 
+  WiFiClient plain_client;
   WiFiClientSecure client;
-  client.setInsecure();
   HTTPClient http;
-  String url = firestore_document_url() + "&updateMask.fieldPaths=completions";
-  if (!http.begin(client, url)) {
-    LOG_SERIAL.println("Firestore PATCH begin failed");
+  String url = completions_api_url();
+  LOG_SERIAL.printf("LifeTodo API POST url=%s\n", url.c_str());
+  if (!begin_lifetodo_http(http, plain_client, client, url)) {
+    LOG_SERIAL.println("LifeTodo API POST begin failed");
     return false;
   }
   http.addHeader("Content-Type", "application/json");
-  int code = http.PATCH(payload);
+  int code = http.POST(payload);
   String response = http.getString();
   http.end();
 
   if (code < 200 || code >= 300) {
-    LOG_SERIAL.printf("Firestore PATCH failed code=%d payload=%s\n", code, response.c_str());
+    LOG_SERIAL.printf("LifeTodo API POST failed code=%d payload=%s\n", code, response.c_str());
     return false;
   }
-  LOG_SERIAL.printf("Firestore completions updated count=%u\n", static_cast<unsigned>(completion_count));
+  LOG_SERIAL.printf("LifeTodo completion updated task=%s completed=%s\n", task_id, completed ? "true" : "false");
   return true;
 }
 
@@ -641,7 +712,7 @@ void task_click(lv_event_t *event) {
     }
   }
 
-  push_completions_to_cloud();
+  push_completion_to_cloud(task->id, task->done);
 }
 
 void build_task_grid() {
@@ -675,9 +746,30 @@ void update_brightness_visuals() {
   lv_label_set_text(brightness_value_label, buffer);
 }
 
+void update_control_center_status() {
+  if (control_wifi_status_label) {
+    lv_label_set_text(control_wifi_status_label, WiFi.status() == WL_CONNECTED ? "已连接" : (provisioning_active ? "配网中" : "未连接"));
+  }
+  if (control_sync_status_label) {
+    lv_label_set_text(control_sync_status_label, cloud_ready ? "飞书已连接" : "正在同步");
+  }
+}
+
+void refresh_wifi_state_labels() {
+  const bool connected = WiFi.status() == WL_CONNECTED;
+  const char *text = provisioning_active ? "Wi-Fi 配网中" : (connected ? "Wi-Fi 已连接" : "Wi-Fi 未连接");
+  if (status_label) {
+    lv_label_set_text(status_label, text);
+  }
+  update_control_center_status();
+}
+
 void set_brightness_panel_open(bool open) {
   brightness_panel_open = open;
-  lv_obj_set_y(brightness_panel, open ? 10 : -112);
+  if (open) {
+    update_control_center_status();
+  }
+  lv_obj_set_y(brightness_panel, open ? 22 : -456);
   lv_obj_clear_flag(brightness_panel, LV_OBJ_FLAG_HIDDEN);
   if (open) {
     lv_obj_add_flag(brightness_overlay, LV_OBJ_FLAG_CLICKABLE);
@@ -686,6 +778,16 @@ void set_brightness_panel_open(bool open) {
   }
   lv_obj_move_foreground(brightness_overlay);
   lv_obj_move_foreground(brightness_panel);
+}
+
+void control_wifi_event(lv_event_t *) {
+  set_brightness_panel_open(false);
+  show_wifi_status_panel();
+}
+
+void control_sync_event(lv_event_t *) {
+  set_brightness_panel_open(false);
+  sync_from_cloud();
 }
 
 void brightness_gesture_event(lv_event_t *event) {
@@ -727,40 +829,148 @@ void build_brightness_controls() {
   lv_obj_add_event_cb(brightness_overlay, brightness_gesture_event, LV_EVENT_CLICKED, nullptr);
 
   brightness_panel = lv_obj_create(top_layer);
-  lv_obj_set_size(brightness_panel, 760, 104);
-  lv_obj_align(brightness_panel, LV_ALIGN_TOP_MID, 0, -112);
+  lv_obj_set_size(brightness_panel, 760, 430);
+  lv_obj_align(brightness_panel, LV_ALIGN_TOP_MID, 0, -456);
   make_static_touch_obj(brightness_panel);
-  lv_obj_set_style_radius(brightness_panel, 8, 0);
-  lv_obj_set_style_bg_color(brightness_panel, lv_color_hex(0x171512), 0);
-  lv_obj_set_style_bg_opa(brightness_panel, 242, 0);
-  lv_obj_set_style_border_width(brightness_panel, 0, 0);
-  lv_obj_set_style_pad_all(brightness_panel, 16, 0);
+  lv_obj_set_style_radius(brightness_panel, 28, 0);
+  lv_obj_set_style_bg_color(brightness_panel, lv_color_hex(0x2f312f), 0);
+  lv_obj_set_style_bg_opa(brightness_panel, LV_OPA_80, 0);
+  lv_obj_set_style_border_color(brightness_panel, lv_color_hex(0xffffff), 0);
+  lv_obj_set_style_border_opa(brightness_panel, LV_OPA_20, 0);
+  lv_obj_set_style_border_width(brightness_panel, 1, 0);
+  lv_obj_set_style_pad_all(brightness_panel, 20, 0);
   lv_obj_add_event_cb(brightness_panel, brightness_gesture_event, LV_EVENT_GESTURE, nullptr);
   lv_obj_add_event_cb(brightness_panel, brightness_gesture_event, LV_EVENT_CLICKED, nullptr);
 
-  lv_obj_t *label = lv_label_create(brightness_panel);
+  lv_obj_t *wifi_card = lv_obj_create(brightness_panel);
+  lv_obj_set_size(wifi_card, 330, 158);
+  lv_obj_align(wifi_card, LV_ALIGN_TOP_LEFT, 0, 0);
+  make_static_touch_obj(wifi_card);
+  lv_obj_add_flag(wifi_card, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_style_radius(wifi_card, 24, 0);
+  lv_obj_set_style_bg_color(wifi_card, lv_color_hex(0x6b6f6d), 0);
+  lv_obj_set_style_bg_opa(wifi_card, LV_OPA_70, 0);
+  lv_obj_set_style_border_width(wifi_card, 1, 0);
+  lv_obj_set_style_border_color(wifi_card, lv_color_hex(0xffffff), 0);
+  lv_obj_set_style_border_opa(wifi_card, LV_OPA_20, 0);
+  lv_obj_add_event_cb(wifi_card, control_wifi_event, LV_EVENT_CLICKED, nullptr);
+
+  lv_obj_t *wifi_icon = lv_obj_create(wifi_card);
+  lv_obj_set_size(wifi_icon, 74, 74);
+  lv_obj_align(wifi_icon, LV_ALIGN_TOP_LEFT, 12, 12);
+  make_static_touch_obj(wifi_icon);
+  lv_obj_clear_flag(wifi_icon, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_style_radius(wifi_icon, 37, 0);
+  lv_obj_set_style_bg_color(wifi_icon, lv_color_hex(0x1f8fff), 0);
+  lv_obj_set_style_border_width(wifi_icon, 0, 0);
+  lv_obj_t *wifi_text = lv_label_create(wifi_icon);
+  lv_label_set_text(wifi_text, "Wi");
+  lv_obj_set_style_text_font(wifi_text, &lv_font_montserrat_24, 0);
+  lv_obj_set_style_text_color(wifi_text, lv_color_hex(0xffffff), 0);
+  lv_obj_center(wifi_text);
+
+  lv_obj_t *wifi_title = lv_label_create(wifi_card);
+  lv_label_set_text(wifi_title, "Wi-Fi");
+  lv_obj_set_style_text_font(wifi_title, &lv_font_montserrat_24, 0);
+  lv_obj_set_style_text_color(wifi_title, lv_color_hex(0xfffdfa), 0);
+  lv_obj_align(wifi_title, LV_ALIGN_TOP_LEFT, 104, 24);
+
+  control_wifi_status_label = lv_label_create(wifi_card);
+  set_cjk_font(control_wifi_status_label);
+  lv_obj_set_style_text_color(control_wifi_status_label, lv_color_hex(0xd8d0c3), 0);
+  lv_obj_align(control_wifi_status_label, LV_ALIGN_TOP_LEFT, 104, 70);
+
+  lv_obj_t *bt_card = lv_obj_create(brightness_panel);
+  lv_obj_set_size(bt_card, 150, 150);
+  lv_obj_align(bt_card, LV_ALIGN_TOP_LEFT, 0, 178);
+  make_static_touch_obj(bt_card);
+  lv_obj_set_style_radius(bt_card, 24, 0);
+  lv_obj_set_style_bg_color(bt_card, lv_color_hex(0x737674), 0);
+  lv_obj_set_style_bg_opa(bt_card, LV_OPA_50, 0);
+  lv_obj_set_style_border_width(bt_card, 1, 0);
+  lv_obj_set_style_border_color(bt_card, lv_color_hex(0xffffff), 0);
+  lv_obj_set_style_border_opa(bt_card, LV_OPA_20, 0);
+  lv_obj_t *bt_label = lv_label_create(bt_card);
+  lv_label_set_text(bt_label, "BT");
+  lv_obj_set_style_text_font(bt_label, &lv_font_montserrat_24, 0);
+  lv_obj_set_style_text_color(bt_label, lv_color_hex(0xfffdfa), 0);
+  lv_obj_center(bt_label);
+
+  lv_obj_t *sync_card = lv_obj_create(brightness_panel);
+  lv_obj_set_size(sync_card, 158, 150);
+  lv_obj_align(sync_card, LV_ALIGN_TOP_LEFT, 172, 178);
+  make_static_touch_obj(sync_card);
+  lv_obj_add_flag(sync_card, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_style_radius(sync_card, 24, 0);
+  lv_obj_set_style_bg_color(sync_card, lv_color_hex(0x737674), 0);
+  lv_obj_set_style_bg_opa(sync_card, LV_OPA_50, 0);
+  lv_obj_set_style_border_width(sync_card, 1, 0);
+  lv_obj_set_style_border_color(sync_card, lv_color_hex(0xffffff), 0);
+  lv_obj_set_style_border_opa(sync_card, LV_OPA_20, 0);
+  lv_obj_add_event_cb(sync_card, control_sync_event, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t *sync_label = lv_label_create(sync_card);
+  lv_label_set_text(sync_label, "SYNC");
+  lv_obj_set_style_text_font(sync_label, &lv_font_montserrat_24, 0);
+  lv_obj_set_style_text_color(sync_label, lv_color_hex(0xfffdfa), 0);
+  lv_obj_align(sync_label, LV_ALIGN_TOP_MID, 0, 36);
+  control_sync_status_label = lv_label_create(sync_card);
+  set_cjk_font(control_sync_status_label);
+  lv_obj_set_style_text_color(control_sync_status_label, lv_color_hex(0xd8d0c3), 0);
+  lv_obj_align(control_sync_status_label, LV_ALIGN_BOTTOM_MID, 0, -28);
+
+  lv_obj_t *brightness_card = lv_obj_create(brightness_panel);
+  lv_obj_set_size(brightness_card, 170, 328);
+  lv_obj_align(brightness_card, LV_ALIGN_TOP_RIGHT, -196, 0);
+  make_static_touch_obj(brightness_card);
+  lv_obj_set_style_radius(brightness_card, 36, 0);
+  lv_obj_set_style_bg_color(brightness_card, lv_color_hex(0x777a78), 0);
+  lv_obj_set_style_bg_opa(brightness_card, LV_OPA_60, 0);
+  lv_obj_set_style_border_width(brightness_card, 1, 0);
+  lv_obj_set_style_border_color(brightness_card, lv_color_hex(0xffffff), 0);
+  lv_obj_set_style_border_opa(brightness_card, LV_OPA_20, 0);
+
+  lv_obj_t *label = lv_label_create(brightness_card);
   lv_label_set_text(label, "LIGHT");
   lv_obj_set_style_text_font(label, &lv_font_montserrat_24, 0);
   lv_obj_set_style_text_color(label, lv_color_hex(0xfffdfa), 0);
-  lv_obj_align(label, LV_ALIGN_LEFT_MID, 8, 0);
+  lv_obj_align(label, LV_ALIGN_TOP_MID, 0, 20);
 
-  brightness_slider = lv_slider_create(brightness_panel);
-  lv_obj_set_size(brightness_slider, 500, 18);
-  lv_obj_align(brightness_slider, LV_ALIGN_CENTER, 24, 2);
+  brightness_slider = lv_slider_create(brightness_card);
+  lv_obj_set_size(brightness_slider, 70, 210);
+  lv_obj_align(brightness_slider, LV_ALIGN_CENTER, 0, 22);
   make_static_touch_obj(brightness_slider);
   lv_slider_set_range(brightness_slider, 20, 100);
   lv_slider_set_value(brightness_slider, brightness_percent, LV_ANIM_OFF);
-  lv_obj_set_style_bg_color(brightness_slider, lv_color_hex(0x3a3935), LV_PART_MAIN);
+  lv_obj_set_style_radius(brightness_slider, 34, LV_PART_MAIN);
+  lv_obj_set_style_radius(brightness_slider, 34, LV_PART_INDICATOR);
+  lv_obj_set_style_bg_color(brightness_slider, lv_color_hex(0xe7e2d8), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(brightness_slider, LV_OPA_90, LV_PART_MAIN);
   lv_obj_set_style_bg_color(brightness_slider, lv_color_hex(0xf1c45b), LV_PART_INDICATOR);
   lv_obj_set_style_bg_color(brightness_slider, lv_color_hex(0xfffdfa), LV_PART_KNOB);
-  lv_obj_set_style_pad_all(brightness_slider, 8, LV_PART_KNOB);
+  lv_obj_set_style_pad_all(brightness_slider, 12, LV_PART_KNOB);
   lv_obj_add_event_cb(brightness_slider, brightness_slider_event, LV_EVENT_VALUE_CHANGED, nullptr);
 
-  brightness_value_label = lv_label_create(brightness_panel);
+  brightness_value_label = lv_label_create(brightness_card);
   lv_obj_set_style_text_font(brightness_value_label, &lv_font_montserrat_24, 0);
   lv_obj_set_style_text_color(brightness_value_label, lv_color_hex(0xfffdfa), 0);
-  lv_obj_align(brightness_value_label, LV_ALIGN_RIGHT_MID, -10, 0);
+  lv_obj_align(brightness_value_label, LV_ALIGN_BOTTOM_MID, 0, -18);
   update_brightness_visuals();
+
+  lv_obj_t *device_card = lv_obj_create(brightness_panel);
+  lv_obj_set_size(device_card, 170, 328);
+  lv_obj_align(device_card, LV_ALIGN_TOP_RIGHT, 0, 0);
+  make_static_touch_obj(device_card);
+  lv_obj_set_style_radius(device_card, 36, 0);
+  lv_obj_set_style_bg_color(device_card, lv_color_hex(0x777a78), 0);
+  lv_obj_set_style_bg_opa(device_card, LV_OPA_50, 0);
+  lv_obj_set_style_border_width(device_card, 1, 0);
+  lv_obj_set_style_border_color(device_card, lv_color_hex(0xffffff), 0);
+  lv_obj_set_style_border_opa(device_card, LV_OPA_20, 0);
+  lv_obj_t *device_label = lv_label_create(device_card);
+  lv_label_set_text(device_label, "LifeTodo");
+  lv_obj_set_style_text_font(device_label, &lv_font_montserrat_24, 0);
+  lv_obj_set_style_text_color(device_label, lv_color_hex(0xfffdfa), 0);
+  lv_obj_center(device_label);
 
   brightness_gesture_zone = lv_obj_create(root);
   lv_obj_set_size(brightness_gesture_zone, SCREEN_W, 66);
@@ -793,11 +1003,86 @@ void set_wifi_setup_visible(bool visible, const char *title, const char *body, c
   }
 
   lv_label_set_text(wifi_setup_title, title ? title : "Wi-Fi 配网");
-  lv_label_set_text(wifi_setup_body, body ? body : "");
+  static char body_buffer[96];
+  if (title && strcmp(title, "设备联网") == 0) {
+    snprintf(body_buffer, sizeof(body_buffer), "设备ID：%s", body ? body : "");
+  } else if (title && strcmp(title, "Wi-Fi 连接中") == 0) {
+    snprintf(body_buffer, sizeof(body_buffer), "正在连接 Wi-Fi");
+  } else {
+    snprintf(body_buffer, sizeof(body_buffer), "%s", body ? body : "");
+  }
+  lv_label_set_text(wifi_setup_body, body_buffer);
   lv_label_set_text(wifi_setup_hint, hint ? hint : "");
-  lv_label_set_text(wifi_setup_steps, "1 CONNECT AP\n2 OPEN 192.168.4.1\n3 SELECT Wi-Fi");
+  lv_label_set_text(wifi_setup_steps, "1 连接热点\n2 打开 192.168.4.1\n3 选择家里 Wi-Fi");
+  if (wifi_disconnect_btn) lv_obj_add_flag(wifi_disconnect_btn, LV_OBJ_FLAG_HIDDEN);
+  if (wifi_reconnect_btn) lv_obj_add_flag(wifi_reconnect_btn, LV_OBJ_FLAG_HIDDEN);
+  if (wifi_reprovision_btn) lv_obj_add_flag(wifi_reprovision_btn, LV_OBJ_FLAG_HIDDEN);
   lv_obj_clear_flag(wifi_setup_panel, LV_OBJ_FLAG_HIDDEN);
   lv_obj_move_foreground(wifi_setup_panel);
+}
+
+void show_wifi_action_buttons() {
+  if (wifi_disconnect_btn) lv_obj_clear_flag(wifi_disconnect_btn, LV_OBJ_FLAG_HIDDEN);
+  if (wifi_reconnect_btn) lv_obj_clear_flag(wifi_reconnect_btn, LV_OBJ_FLAG_HIDDEN);
+  if (wifi_reprovision_btn) lv_obj_clear_flag(wifi_reprovision_btn, LV_OBJ_FLAG_HIDDEN);
+}
+
+void show_wifi_status_panel() {
+  if (!wifi_setup_panel) return;
+
+  bool connected = WiFi.status() == WL_CONNECTED;
+  String ssid = connected ? WiFi.SSID() : saved_wifi_ssid();
+  String ip = connected ? WiFi.localIP().toString() : String("--");
+  static char body_buffer[128];
+  static char hint_buffer[128];
+  snprintf(body_buffer, sizeof(body_buffer), connected ? "当前网络：%s" : "当前未联网", ssid.length() ? ssid.c_str() : "未设置");
+  snprintf(hint_buffer, sizeof(hint_buffer), connected ? "IP：%s" : "已记忆网络：%s", ip.c_str(), ssid.length() ? ssid.c_str() : "无");
+
+  lv_label_set_text(wifi_setup_title, "设备联网");
+  lv_label_set_text(wifi_setup_body, body_buffer);
+  lv_label_set_text(wifi_setup_steps, connected ? "设备已连接家庭 Wi-Fi\n可断开、重连或重新联网" : "设备未连接家庭 Wi-Fi\n可重连已记忆网络或重新联网");
+  lv_label_set_text(wifi_setup_hint, hint_buffer);
+  show_wifi_action_buttons();
+  lv_obj_clear_flag(wifi_setup_panel, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_foreground(wifi_setup_panel);
+  refresh_wifi_state_labels();
+}
+
+void wifi_setup_close_event(lv_event_t *event) {
+  lv_event_code_t code = lv_event_get_code(event);
+  if (code == LV_EVENT_CLICKED) {
+    set_wifi_setup_visible(false, "", "", "");
+  }
+}
+
+void wifi_disconnect_event(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  if (provisioning_active) {
+    stop_wifi_provisioning();
+  }
+  WiFi.disconnect(false, false);
+  cloud_ready = false;
+  refresh_wifi_state_labels();
+  show_wifi_status_panel();
+}
+
+void wifi_reconnect_event(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  if (saved_wifi_ssid().isEmpty()) {
+    show_wifi_status_panel();
+    return;
+  }
+  if (provisioning_active) {
+    stop_wifi_provisioning();
+  }
+  set_wifi_setup_visible(true, "Wi-Fi 连接中", saved_wifi_ssid().c_str(), "正在重连已记忆网络");
+  connect_saved_wifi();
+  show_wifi_status_panel();
+}
+
+void wifi_reprovision_event(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  start_wifi_provisioning();
 }
 
 void build_wifi_setup_panel() {
@@ -815,19 +1100,35 @@ void build_wifi_setup_panel() {
   wifi_setup_title = lv_label_create(wifi_setup_panel);
   set_cjk_title_font(wifi_setup_title);
   lv_obj_set_style_text_color(wifi_setup_title, lv_color_hex(0xfffdfa), 0);
-  lv_obj_set_width(wifi_setup_title, 596);
+  lv_obj_set_width(wifi_setup_title, 500);
   lv_label_set_long_mode(wifi_setup_title, LV_LABEL_LONG_WRAP);
   lv_obj_align(wifi_setup_title, LV_ALIGN_TOP_LEFT, 0, 0);
 
+  wifi_setup_close_btn = lv_obj_create(wifi_setup_panel);
+  lv_obj_set_size(wifi_setup_close_btn, 54, 54);
+  lv_obj_align(wifi_setup_close_btn, LV_ALIGN_TOP_RIGHT, 0, -4);
+  make_static_touch_obj(wifi_setup_close_btn);
+  lv_obj_add_flag(wifi_setup_close_btn, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_style_radius(wifi_setup_close_btn, 27, 0);
+  lv_obj_set_style_bg_color(wifi_setup_close_btn, lv_color_hex(0xffffff), 0);
+  lv_obj_set_style_bg_opa(wifi_setup_close_btn, LV_OPA_20, 0);
+  lv_obj_set_style_border_width(wifi_setup_close_btn, 0, 0);
+  lv_obj_add_event_cb(wifi_setup_close_btn, wifi_setup_close_event, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t *close_label = lv_label_create(wifi_setup_close_btn);
+  lv_label_set_text(close_label, "X");
+  lv_obj_set_style_text_font(close_label, &lv_font_montserrat_24, 0);
+  lv_obj_set_style_text_color(close_label, lv_color_hex(0xfffdfa), 0);
+  lv_obj_center(close_label);
+
   wifi_setup_body = lv_label_create(wifi_setup_panel);
-  lv_obj_set_style_text_font(wifi_setup_body, &lv_font_montserrat_24, 0);
+  set_cjk_font(wifi_setup_body);
   lv_obj_set_style_text_color(wifi_setup_body, lv_color_hex(0xf1c45b), 0);
   lv_obj_set_width(wifi_setup_body, 596);
   lv_label_set_long_mode(wifi_setup_body, LV_LABEL_LONG_WRAP);
   lv_obj_align(wifi_setup_body, LV_ALIGN_TOP_LEFT, 0, 56);
 
   wifi_setup_steps = lv_label_create(wifi_setup_panel);
-  lv_obj_set_style_text_font(wifi_setup_steps, &lv_font_montserrat_24, 0);
+  set_cjk_font(wifi_setup_steps);
   lv_obj_set_style_text_color(wifi_setup_steps, lv_color_hex(0xfffdfa), 0);
   lv_obj_set_width(wifi_setup_steps, 596);
   lv_label_set_long_mode(wifi_setup_steps, LV_LABEL_LONG_WRAP);
@@ -838,7 +1139,52 @@ void build_wifi_setup_panel() {
   lv_obj_set_style_text_color(wifi_setup_hint, lv_color_hex(0xd8d0c3), 0);
   lv_obj_set_width(wifi_setup_hint, 596);
   lv_label_set_long_mode(wifi_setup_hint, LV_LABEL_LONG_WRAP);
-  lv_obj_align(wifi_setup_hint, LV_ALIGN_TOP_LEFT, 0, 228);
+  lv_obj_align(wifi_setup_hint, LV_ALIGN_TOP_LEFT, 0, 210);
+
+  wifi_disconnect_btn = lv_obj_create(wifi_setup_panel);
+  lv_obj_set_size(wifi_disconnect_btn, 176, 48);
+  lv_obj_align(wifi_disconnect_btn, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+  make_static_touch_obj(wifi_disconnect_btn);
+  lv_obj_add_flag(wifi_disconnect_btn, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_style_radius(wifi_disconnect_btn, 8, 0);
+  lv_obj_set_style_bg_color(wifi_disconnect_btn, lv_color_hex(0x5f5a52), 0);
+  lv_obj_set_style_border_width(wifi_disconnect_btn, 0, 0);
+  lv_obj_add_event_cb(wifi_disconnect_btn, wifi_disconnect_event, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t *disconnect_label = lv_label_create(wifi_disconnect_btn);
+  lv_label_set_text(disconnect_label, "断开网络");
+  set_cjk_font(disconnect_label);
+  lv_obj_set_style_text_color(disconnect_label, lv_color_hex(0xfffdfa), 0);
+  lv_obj_center(disconnect_label);
+
+  wifi_reconnect_btn = lv_obj_create(wifi_setup_panel);
+  lv_obj_set_size(wifi_reconnect_btn, 176, 48);
+  lv_obj_align(wifi_reconnect_btn, LV_ALIGN_BOTTOM_MID, 0, 0);
+  make_static_touch_obj(wifi_reconnect_btn);
+  lv_obj_add_flag(wifi_reconnect_btn, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_style_radius(wifi_reconnect_btn, 8, 0);
+  lv_obj_set_style_bg_color(wifi_reconnect_btn, lv_color_hex(0x6b8f71), 0);
+  lv_obj_set_style_border_width(wifi_reconnect_btn, 0, 0);
+  lv_obj_add_event_cb(wifi_reconnect_btn, wifi_reconnect_event, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t *reconnect_label = lv_label_create(wifi_reconnect_btn);
+  lv_label_set_text(reconnect_label, "重连");
+  set_cjk_font(reconnect_label);
+  lv_obj_set_style_text_color(reconnect_label, lv_color_hex(0xfffdfa), 0);
+  lv_obj_center(reconnect_label);
+
+  wifi_reprovision_btn = lv_obj_create(wifi_setup_panel);
+  lv_obj_set_size(wifi_reprovision_btn, 176, 48);
+  lv_obj_align(wifi_reprovision_btn, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+  make_static_touch_obj(wifi_reprovision_btn);
+  lv_obj_add_flag(wifi_reprovision_btn, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_style_radius(wifi_reprovision_btn, 8, 0);
+  lv_obj_set_style_bg_color(wifi_reprovision_btn, lv_color_hex(0xf1c45b), 0);
+  lv_obj_set_style_border_width(wifi_reprovision_btn, 0, 0);
+  lv_obj_add_event_cb(wifi_reprovision_btn, wifi_reprovision_event, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t *reprovision_label = lv_label_create(wifi_reprovision_btn);
+  lv_label_set_text(reprovision_label, "重新联网");
+  set_cjk_font(reprovision_label);
+  lv_obj_set_style_text_color(reprovision_label, lv_color_hex(0x171512), 0);
+  lv_obj_center(reprovision_label);
 
   set_wifi_setup_visible(false, "", "", "");
 }
@@ -861,10 +1207,6 @@ String html_attr_escape(const String &value) {
   String escaped = html_escape(value);
   escaped.replace("'", "&#39;");
   return escaped;
-}
-
-String wifi_encryption_label(wifi_auth_mode_t auth) {
-  return auth == WIFI_AUTH_OPEN ? "Open" : "Secured";
 }
 
 void refresh_wifi_scan_options(bool force = false) {
@@ -894,10 +1236,10 @@ void refresh_wifi_scan_options(bool force = false) {
     scanned_wifi_options += html_attr_escape(ssid);
     scanned_wifi_options += F("'>");
     scanned_wifi_options += html_escape(ssid);
-    scanned_wifi_options += F(" · ");
-    scanned_wifi_options += WiFi.RSSI(i);
-    scanned_wifi_options += F(" dBm · ");
-    scanned_wifi_options += wifi_encryption_label(WiFi.encryptionType(i));
+    scanned_wifi_options += F("（2.4G）");
+    if (WiFi.encryptionType(i) == WIFI_AUTH_OPEN) {
+      scanned_wifi_options += F(" · 无密码");
+    }
     scanned_wifi_options += F("</option>");
   }
 
@@ -944,22 +1286,35 @@ void send_wifi_setup_page() {
         "form{margin-top:24px}label{display:block;margin:16px 0 8px;font-weight:700}"
         "input,select{box-sizing:border-box;width:100%;height:52px;border:2px solid #d8d0c3;border-radius:8px;padding:0 14px;font-size:18px;background:#fffdfa;color:#171512}"
         "button{width:100%;height:54px;margin-top:24px;border:0;border-radius:8px;background:#171512;color:#fffdfa;font-size:18px;font-weight:700}"
-        ".chip,.link{display:inline-block;margin-top:14px;padding:8px 12px;border-radius:8px;background:#efe7d7;color:#171512;text-decoration:none}"
+        ".chip,.link{display:inline-flex;align-items:center;gap:8px;margin-top:14px;padding:8px 12px;border-radius:8px;background:#efe7d7;color:#171512;text-decoration:none;border:0;font:inherit}"
         ".hint{font-size:14px;color:#6e675d;margin-top:8px}"
+        ".manual{display:none}.manual.show{display:block}"
+        ".spinner{display:none;width:14px;height:14px;border:2px solid #c9bfae;border-top-color:#171512;border-radius:50%;animation:spin .8s linear infinite}.loading .spinner{display:inline-block}"
+        "@keyframes spin{to{transform:rotate(360deg)}}"
         "</style></head><body><main><h1>LifeTodo 配网</h1>"
         "<p class='muted'>选择家里的 Wi-Fi，输入密码后提交。设备会自动保存并连接，成功后屏幕回到今日任务。</p>");
   page += F("<span class='chip'>设备热点 ");
   page += html_escape(provisioning_ap_ssid);
-  page += F("</span> <a class='link' href='/?rescan=1'>重新扫描</a>"
+  page += F("</span> <button class='link' id='rescan' type='button'><span class='spinner'></span><span id='rescanText'>重新扫描</span></button>"
             "<form method='post' action='/api/wifi'>"
-            "<label>选择 Wi-Fi</label><select name='ssid_select'>");
+            "<label>选择 Wi-Fi</label><select id='ssidSelect' name='ssid_select'>");
   page += scanned_wifi_options;
   page += F("<option value=''>手动输入其他 Wi-Fi</option></select>"
-            "<label>手动输入 Wi-Fi 名称</label><input name='ssid_manual' maxlength='32' placeholder='未列出时填写' value='");
+            "<div id='manualSsid' class='manual'><label>手动输入 Wi-Fi 名称</label><input name='ssid_manual' maxlength='32' placeholder='未列出时填写' value='");
   page += html_escape(current_ssid);
-  page += F("'><p class='hint'>优先使用上方选择；如果选择“手动输入其他 Wi-Fi”，则使用这里填写的名称。</p>"
+  page += F("'><p class='hint'>优先使用上方选择；如果选择“手动输入其他 Wi-Fi”，则使用这里填写的名称。</p></div>"
             "<label>Wi-Fi 密码</label><input name='password' type='password' maxlength='64' autocomplete='current-password'>"
-            "<button type='submit'>保存并连接</button></form></main></body></html>");
+            "<button type='submit'>保存并连接</button></form>"
+            "<script>"
+            "const select=document.getElementById('ssidSelect');"
+            "const manual=document.getElementById('manualSsid');"
+            "function syncManual(){manual.classList.toggle('show',select.value==='');}"
+            "select.addEventListener('change',syncManual);syncManual();"
+            "document.getElementById('rescan').addEventListener('click',function(){"
+            "this.classList.add('loading');this.disabled=true;document.getElementById('rescanText').textContent='扫描中';"
+            "setTimeout(()=>{location.href='/?rescan=1'},60);"
+            "});"
+            "</script></main></body></html>");
   wifi_server.send(200, "text/html; charset=utf-8", page);
 }
 
@@ -1002,6 +1357,13 @@ void handle_wifi_submit() {
 
 void configure_wifi_server_routes() {
   wifi_server.on("/", HTTP_GET, send_wifi_setup_page);
+  wifi_server.on("/generate_204", HTTP_GET, send_wifi_setup_page);
+  wifi_server.on("/gen_204", HTTP_GET, send_wifi_setup_page);
+  wifi_server.on("/hotspot-detect.html", HTTP_GET, send_wifi_setup_page);
+  wifi_server.on("/library/test/success.html", HTTP_GET, send_wifi_setup_page);
+  wifi_server.on("/ncsi.txt", HTTP_GET, send_wifi_setup_page);
+  wifi_server.on("/connecttest.txt", HTTP_GET, send_wifi_setup_page);
+  wifi_server.on("/redirect", HTTP_GET, send_wifi_setup_page);
   wifi_server.on("/api/wifi", HTTP_GET, handle_wifi_status_api);
   wifi_server.on("/api/wifi", HTTP_POST, handle_wifi_submit);
   wifi_server.onNotFound([]() {
@@ -1019,24 +1381,31 @@ String device_suffix() {
 }
 
 void start_wifi_provisioning() {
-  if (provisioning_active) return;
+  if (provisioning_active) {
+    set_wifi_setup_visible(true, "设备联网", provisioning_ap_ssid.c_str(), "手机连接设备后访问 192.168.4.1 为设备联网");
+    return;
+  }
 
   provisioning_ap_ssid = String("LifeTodo-") + device_suffix();
   WiFi.mode(WIFI_AP_STA);
+  IPAddress ap_ip(192, 168, 4, 1);
+  IPAddress gateway(192, 168, 4, 1);
+  IPAddress subnet(255, 255, 255, 0);
+  WiFi.softAPConfig(ap_ip, gateway, subnet);
   bool ap_ok = WiFi.softAP(provisioning_ap_ssid.c_str());
-  IPAddress ap_ip = WiFi.softAPIP();
-  refresh_wifi_scan_options(true);
+  ap_ip = WiFi.softAPIP();
   dns_server.start(DNS_PORT, "*", ap_ip);
   configure_wifi_server_routes();
   wifi_server.begin();
   provisioning_active = true;
+  refresh_wifi_scan_options(true);
 
   LOG_SERIAL.printf("WiFi provisioning %s ap=%s ip=%s\n",
                     ap_ok ? "started" : "failed",
                     provisioning_ap_ssid.c_str(),
                     ap_ip.toString().c_str());
-  set_wifi_setup_visible(true, "设备接入", provisioning_ap_ssid.c_str(), "LifeTodo 192.168.4.1");
-  lv_label_set_text(status_label, "Wi-Fi 未连接");
+  set_wifi_setup_visible(true, "设备联网", provisioning_ap_ssid.c_str(), "手机连接设备后访问 192.168.4.1 为设备联网");
+  refresh_wifi_state_labels();
 }
 
 void stop_wifi_provisioning() {
@@ -1046,6 +1415,7 @@ void stop_wifi_provisioning() {
   WiFi.softAPdisconnect(true);
   provisioning_active = false;
   set_wifi_setup_visible(false, "", "", "");
+  refresh_wifi_state_labels();
   LOG_SERIAL.println("WiFi provisioning stopped");
 }
 
@@ -1067,7 +1437,7 @@ bool connect_wifi_with_credentials(const String &ssid, const String &password) {
 
   if (WiFi.status() != WL_CONNECTED) {
     LOG_SERIAL.printf("WiFi connect failed status=%d\n", WiFi.status());
-    lv_label_set_text(status_label, "Wi-Fi 未连接");
+    refresh_wifi_state_labels();
     return false;
   }
 
@@ -1075,7 +1445,8 @@ bool connect_wifi_with_credentials(const String &ssid, const String &password) {
   stop_wifi_provisioning();
   configTzTime("CST-8", "pool.ntp.org", "time.nist.gov");
   update_today_key();
-  lv_label_set_text(status_label, "Wi-Fi 已连接");
+  refresh_wifi_state_labels();
+  delay(1500);
   sync_from_cloud();
   return true;
 }
@@ -1201,6 +1572,11 @@ void setup() {
 void loop() {
   lv_timer_handler();
   handle_wifi_services();
+  int wifi_status = WiFi.status();
+  if (wifi_status != last_wifi_status_code) {
+    last_wifi_status_code = wifi_status;
+    refresh_wifi_state_labels();
+  }
   if (wifi_connect_pending) {
     wifi_connect_pending = false;
     connect_saved_wifi();
@@ -1210,7 +1586,7 @@ void loop() {
                       ESP.getFreeHeap(), ESP.getFreePsram(), WiFi.status(), remaining_count());
     last_heartbeat_ms = millis();
   }
-  if (WiFi.status() == WL_CONNECTED && millis() - last_cloud_sync_ms > CLOUD_SYNC_INTERVAL_MS) {
+  if (!provisioning_active && WiFi.status() == WL_CONNECTED && millis() - last_cloud_sync_ms > CLOUD_SYNC_INTERVAL_MS) {
     last_cloud_sync_ms = millis();
     sync_from_cloud();
   }

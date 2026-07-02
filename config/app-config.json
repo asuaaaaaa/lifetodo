@@ -3,7 +3,9 @@
   "aliyunServerIp": "120.55.46.251",
   "baseUrl": "https://lifetodo.xyz",
   "appUrl": "https://lifetodo.xyz/app/",
-  "deviceUrlPattern": "https://lifetodo.xyz/device/?home={homeId}&device={deviceId}&token={token}",
-  "firebaseProjectId": "lifetodo-47399",
+  "deviceUrlPattern": "https://lifetodo.xyz/device/?home={homeId}&device={deviceId}",
+  "apiUrl": "https://lifetodo.xyz/api",
+  "larkBaseToken": "L6kdbumDKa8QFosicOIcItBjncb",
+  "larkTodoTableId": "tblrbHrBuoijFiXK",
   "defaultHomeId": "demo-home"
 }

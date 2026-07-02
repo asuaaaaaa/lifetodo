@@ -1,21 +1,8 @@
-const firebaseConfig = {
-  apiKey: "AIzaSyAF_WBUeMoqmyIY4YzepdF7WFHjgYy2Rms",
-  authDomain: "lifetodo-47399.firebaseapp.com",
-  projectId: "lifetodo-47399",
-  storageBucket: "lifetodo-47399.firebasestorage.app",
-  messagingSenderId: "630925592027",
-  appId: "1:630925592027:web:c49732e1060c243c3f53fe",
-  measurementId: "G-5Z09SBNKH0"
-};
-
-const firebaseVersion = "10.14.1";
 const homeId = new URLSearchParams(location.search).get("home") || "demo-home";
 const localKey = `lifetodo.${homeId}`;
+const apiBase = getApiBase();
 
-let firestoreApi;
-let authApi;
-let db;
-let user;
+let syncTimer;
 
 export function getHomeId() {
   return homeId;
@@ -25,28 +12,11 @@ export async function createStore(seed, onChange = () => {}) {
   const local = createLocalStore(seed);
 
   try {
-    const [appModule, authModule, firestoreModule] = await Promise.all([
-      import(`https://www.gstatic.com/firebasejs/${firebaseVersion}/firebase-app.js`),
-      import(`https://www.gstatic.com/firebasejs/${firebaseVersion}/firebase-auth.js`),
-      import(`https://www.gstatic.com/firebasejs/${firebaseVersion}/firebase-firestore.js`)
-    ]);
-
-    const app = appModule.initializeApp(firebaseConfig);
-    authApi = authModule;
-    firestoreApi = firestoreModule;
-    db = firestoreApi.getFirestore(app);
-    user = await ensureUser();
-
-    const cloud = await readCloudState();
-    if (!cloud) {
-      await writeCloudState(local.getState(), "seed");
-    } else {
-      local.replaceState(cloud);
-    }
-
-    return createCloudStore(local, onChange);
+    const cloud = await apiRequest(`/api/state?home=${encodeURIComponent(homeId)}`);
+    local.replaceState(cloud.state || seed);
+    return createApiStore(local, onChange);
   } catch (error) {
-    console.warn("Firebase unavailable, using localStorage.", error);
+    console.warn("LifeTodo API unavailable, using localStorage.", error);
     return local;
   }
 }
@@ -92,6 +62,18 @@ function createLocalStore(seed) {
       state.members = state.members.filter((member) => member.id !== memberId);
       writeLocalState(state);
     },
+    async addDevice(device) {
+      state.devices = upsertDevice(state.devices, device);
+      writeLocalState(state);
+    },
+    async updateDevice(deviceId, patch) {
+      state.devices = state.devices.map((device) => (device.id === deviceId ? { ...device, ...patch } : device));
+      writeLocalState(state);
+    },
+    async deleteDevice(deviceId) {
+      state.devices = state.devices.filter((device) => device.id !== deviceId);
+      writeLocalState(state);
+    },
     async setCompletion(taskId, date, completed, source) {
       setLocalCompletion(state, taskId, date, completed, source);
       writeLocalState(state);
@@ -103,21 +85,21 @@ function createLocalStore(seed) {
   };
 }
 
-function createCloudStore(local, onChange) {
-  subscribeToCloudState(local, onChange);
+function createApiStore(local, onChange) {
+  startPolling(local, onChange);
 
   return {
-    mode: "firebase",
+    mode: "lark",
     getState: local.getState,
     replaceState: local.replaceState,
     async addTask(task) {
       local.getState().tasks.push(task);
-      await writeCloudState(local.getState(), "addTask");
+      await writeApiState(local.getState(), "addTask");
       writeLocalState(local.getState());
     },
     async updateTask(taskId, patch) {
       local.getState().tasks = local.getState().tasks.map((task) => (task.id === taskId ? { ...task, ...patch } : task));
-      await writeCloudState(local.getState(), "updateTask");
+      await writeApiState(local.getState(), "updateTask");
       writeLocalState(local.getState());
     },
     async deleteTask(taskId) {
@@ -127,93 +109,106 @@ function createCloudStore(local, onChange) {
           delete local.getState().completions[key];
         }
       });
-      await writeCloudState(local.getState(), "deleteTask");
+      await writeApiState(local.getState(), "deleteTask");
       writeLocalState(local.getState());
     },
     async addMember(member) {
       local.getState().members.push(member);
-      await writeCloudState(local.getState(), "addMember");
+      await writeApiState(local.getState(), "addMember");
       writeLocalState(local.getState());
     },
     async updateMember(memberId, patch) {
       local.getState().members = local
         .getState()
         .members.map((member) => (member.id === memberId ? { ...member, ...patch } : member));
-      await writeCloudState(local.getState(), "updateMember");
+      await writeApiState(local.getState(), "updateMember");
       writeLocalState(local.getState());
     },
     async deleteMember(memberId) {
       local.getState().members = local.getState().members.filter((member) => member.id !== memberId);
-      await writeCloudState(local.getState(), "deleteMember");
+      await writeApiState(local.getState(), "deleteMember");
+      writeLocalState(local.getState());
+    },
+    async addDevice(device) {
+      local.getState().devices = upsertDevice(local.getState().devices, device);
+      await writeApiState(local.getState(), "addDevice");
+      writeLocalState(local.getState());
+    },
+    async updateDevice(deviceId, patch) {
+      local.getState().devices = local
+        .getState()
+        .devices.map((device) => (device.id === deviceId ? { ...device, ...patch } : device));
+      await writeApiState(local.getState(), "updateDevice");
+      writeLocalState(local.getState());
+    },
+    async deleteDevice(deviceId) {
+      local.getState().devices = local.getState().devices.filter((device) => device.id !== deviceId);
+      await writeApiState(local.getState(), "deleteDevice");
       writeLocalState(local.getState());
     },
     async setCompletion(taskId, date, completed, source) {
-      setLocalCompletion(local.getState(), taskId, date, completed, source);
-      await writeCloudState(local.getState(), source);
+      const response = await apiRequest(`/api/completions?home=${encodeURIComponent(homeId)}`, {
+        method: "POST",
+        body: JSON.stringify({ taskId, date, completed, source })
+      });
+      local.replaceState(response.state);
       writeLocalState(local.getState());
     },
     async toggleCompletion(taskId, date, source) {
-      toggleLocalCompletion(local.getState(), taskId, date, source);
-      await writeCloudState(local.getState(), source);
+      const completed = !local.getState().completions[`${taskId}_${date}`];
+      const response = await apiRequest(`/api/completions?home=${encodeURIComponent(homeId)}`, {
+        method: "POST",
+        body: JSON.stringify({ taskId, date, completed, source })
+      });
+      local.replaceState(response.state);
       writeLocalState(local.getState());
     }
   };
 }
 
-function subscribeToCloudState(local, onChange) {
-  const homeRef = firestoreApi.doc(db, "homes", homeId);
-  firestoreApi.onSnapshot(homeRef, (snapshot) => {
-    if (!snapshot.exists()) {
-      return;
+function startPolling(local, onChange) {
+  clearInterval(syncTimer);
+  syncTimer = setInterval(async () => {
+    try {
+      const response = await apiRequest(`/api/state?home=${encodeURIComponent(homeId)}`);
+      local.replaceState(response.state);
+      onChange();
+    } catch (error) {
+      console.warn("LifeTodo API polling failed.", error);
     }
-    const data = snapshot.data();
-    local.replaceState({
-      members: data.members || [],
-      tasks: data.tasks || [],
-      completions: data.completions || {}
-    });
-    onChange();
+  }, 5000);
+}
+
+async function writeApiState(state, source) {
+  await apiRequest(`/api/state?home=${encodeURIComponent(homeId)}`, {
+    method: "PUT",
+    body: JSON.stringify({ state, source })
   });
 }
 
-async function ensureUser() {
-  if (authApi.getAuth().currentUser) {
-    return authApi.getAuth().currentUser;
-  }
-  const credential = await authApi.signInAnonymously(authApi.getAuth());
-  return credential.user;
-}
-
-async function readCloudState() {
-  const homeRef = firestoreApi.doc(db, "homes", homeId);
-  const snapshot = await firestoreApi.getDoc(homeRef);
-  if (!snapshot.exists()) {
-    return null;
-  }
-  const data = snapshot.data();
-  return normalizeState({
-    members: data.members || [],
-    tasks: data.tasks || [],
-    completions: data.completions || {}
+async function apiRequest(path, options = {}) {
+  const response = await fetch(`${apiBase}${path}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {})
+    }
   });
+  if (!response.ok) {
+    throw new Error(`LifeTodo API request failed: ${response.status}`);
+  }
+  return response.json();
 }
 
-async function writeCloudState(state, source) {
-  const homeRef = firestoreApi.doc(db, "homes", homeId);
-  await firestoreApi.setDoc(
-    homeRef,
-    {
-      name: "家",
-      timezone: "Asia/Shanghai",
-      updatedBy: user.uid,
-      updatedSource: source,
-      updatedAt: firestoreApi.serverTimestamp(),
-      members: state.members,
-      tasks: state.tasks,
-      completions: state.completions
-    },
-    { merge: true }
-  );
+function getApiBase() {
+  const queryValue = new URLSearchParams(location.search).get("api");
+  if (queryValue) {
+    return queryValue.replace(/\/$/, "");
+  }
+  if (location.protocol === "http:" || location.protocol === "https:") {
+    return location.origin;
+  }
+  return "https://lifetodo.xyz";
 }
 
 function readLocalState(seed) {
@@ -236,6 +231,7 @@ function normalizeState(state) {
   return {
     members: Array.isArray(state.members) ? state.members.map(normalizeMember) : [],
     tasks: Array.isArray(state.tasks) ? state.tasks.map(normalizeTask) : [],
+    devices: Array.isArray(state.devices) ? state.devices.map(normalizeDevice) : [],
     completions: state.completions && typeof state.completions === "object" ? state.completions : {}
   };
 }
@@ -254,6 +250,26 @@ function normalizeTask(task) {
     assigneeId: task.assigneeId || task.assigneeIds?.[0],
     enabled: task.enabled !== false
   };
+}
+
+function normalizeDevice(device) {
+  return {
+    id: device.id,
+    name: device.name || device.id || "未命名设备",
+    location: device.location || "",
+    model: device.model || "ESP32-S3-Touch-LCD-4.3",
+    status: device.status || "offline",
+    lastSeenAt: device.lastSeenAt || null
+  };
+}
+
+function upsertDevice(devices, device) {
+  const normalized = normalizeDevice(device);
+  const exists = devices.some((item) => item.id === normalized.id);
+  if (!exists) {
+    return [...devices, normalized];
+  }
+  return devices.map((item) => (item.id === normalized.id ? { ...item, ...normalized } : item));
 }
 
 function toggleLocalCompletion(state, taskId, date, source) {

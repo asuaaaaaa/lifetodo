@@ -94,10 +94,22 @@
         </section>
 
         <section class="view" id="deviceView">
-          <div class="device-tools" id="deviceTools"></div>
-          <div class="device-frame">
-            <div class="device-screen" id="deviceScreen"></div>
-          </div>
+          <form class="task-form" id="deviceForm">
+            <label>
+              <span>设备名称</span>
+              <input name="name" required placeholder="比如：玄关屏">
+            </label>
+            <label>
+              <span>设备 ID</span>
+              <input name="deviceId" required placeholder="比如：entry-screen">
+            </label>
+            <label>
+              <span>位置</span>
+              <input name="location" placeholder="比如：门口">
+            </label>
+            <button class="primary-button" type="submit">添加设备</button>
+          </form>
+          <div class="task-list" id="deviceManager"></div>
         </section>
       </section>
     </main>
