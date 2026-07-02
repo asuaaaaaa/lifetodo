@@ -38,9 +38,9 @@ jobs:
           port: ${{ secrets.ALIYUN_PORT || 22 }}
           username: ${{ secrets.ALIYUN_USER }}
           key: ${{ secrets.ALIYUN_SSH_KEY }}
-          source: "dist/site"
+          source: "dist/site/*"
           target: ${{ secrets.ALIYUN_DEPLOY_PATH || '/var/www/lifetodo/dist/site' }}
-          strip_components: 1
+          strip_components: 2
           # overwrite: true
           rm: true
 

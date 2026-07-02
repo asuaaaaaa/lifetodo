@@ -50,8 +50,9 @@ constexpr uint32_t CLOUD_SYNC_RETRY_DELAY_MS = 1200;
 constexpr uint32_t TIME_SYNC_TIMEOUT_MS = 9000;
 constexpr uint16_t DNS_PORT = 53;
 constexpr uint8_t CLOUD_SYNC_ATTEMPTS = 3;
-constexpr size_t MAX_TASKS = 4;
+constexpr size_t MAX_TASKS = 12;
 constexpr size_t MAX_COMPLETIONS = 40;
+constexpr size_t MAX_PENDING_COMPLETIONS = 8;
 uint8_t ch422g_output = 0xff;
 
 const char GOOGLE_GTS_ROOT_R1[] PROGMEM = R"EOF(
@@ -130,6 +131,9 @@ lv_obj_t *wifi_setup_close_btn;
 lv_obj_t *wifi_disconnect_btn;
 lv_obj_t *wifi_reconnect_btn;
 lv_obj_t *wifi_reprovision_btn;
+lv_obj_t *empty_state_panel;
+lv_obj_t *empty_state_title;
+lv_obj_t *empty_state_body;
 uint32_t last_heartbeat_ms = 0;
 uint32_t last_touch_log_ms = 0;
 uint32_t last_cloud_sync_ms = 0;
@@ -162,12 +166,22 @@ struct Task {
 
 struct TaskView {
   lv_obj_t *card = nullptr;
+  lv_obj_t *accent = nullptr;
+  lv_obj_t *check = nullptr;
   lv_obj_t *member = nullptr;
   lv_obj_t *title = nullptr;
+  lv_obj_t *label = nullptr;
   lv_obj_t *status = nullptr;
 };
 
-Task tasks[] = {
+struct PendingCompletion {
+  char task_id[40];
+  bool completed;
+  uint8_t attempts;
+  uint32_t next_try_ms;
+};
+
+Task tasks[MAX_TASKS] = {
     {"litter", "妈妈", "铲猫砂盆", "每 3 天", false, 0xef7f65},
     {"toilet", "爸爸", "清洁马桶", "每月", false, 0x5d8fb4},
     {"plants", "小朋友", "给阳台植物浇水", "每 2 天", false, 0x6ba36f},
@@ -178,6 +192,8 @@ TaskView task_views[TASK_COUNT];
 size_t task_count = 4;
 char completion_keys[MAX_COMPLETIONS][64];
 size_t completion_count = 0;
+PendingCompletion pending_completions[MAX_PENDING_COMPLETIONS];
+size_t pending_completion_count = 0;
 bool task_click_armed = true;
 bool touch_down = false;
 uint32_t touch_release_started_ms = 0;
@@ -192,6 +208,8 @@ void update_summary();
 void render_tasks();
 bool sync_from_cloud();
 bool push_completion_to_cloud(const char *task_id, bool completed);
+void queue_completion_sync(const char *task_id, bool completed);
+void process_pending_completion_sync();
 void set_wifi_setup_visible(bool visible, const char *title, const char *body, const char *hint);
 void start_wifi_provisioning();
 void stop_wifi_provisioning();
@@ -324,6 +342,44 @@ bool wait_for_time_sync() {
   }
   LOG_SERIAL.println("Time sync timed out");
   return false;
+}
+
+int parse_http_month(const String &month) {
+  static const char *months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                 "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+  for (int i = 0; i < 12; i++) {
+    if (month == months[i]) return i + 1;
+  }
+  return 0;
+}
+
+bool update_today_from_http_date(const String &date_header) {
+  if (date_header.length() < 16) return false;
+
+  int comma = date_header.indexOf(',');
+  int day_start = comma >= 0 ? comma + 2 : 0;
+  if (date_header.length() < static_cast<size_t>(day_start + 11)) return false;
+
+  int day = date_header.substring(day_start, day_start + 2).toInt();
+  String month_text = date_header.substring(day_start + 3, day_start + 6);
+  int month = parse_http_month(month_text);
+  int year = date_header.substring(day_start + 7, day_start + 11).toInt();
+  int hour = date_header.length() >= static_cast<size_t>(day_start + 14)
+                 ? date_header.substring(day_start + 12, day_start + 14).toInt()
+                 : 0;
+
+  if (day <= 0 || month <= 0 || year <= 0) return false;
+
+  struct tm server_tm = {};
+  server_tm.tm_year = year - 1900;
+  server_tm.tm_mon = month - 1;
+  server_tm.tm_mday = day;
+  server_tm.tm_hour = hour + 8;
+  server_tm.tm_isdst = -1;
+  mktime(&server_tm);
+  strftime(today_key, sizeof(today_key), "%Y-%m-%d", &server_tm);
+  LOG_SERIAL.printf("Time from HTTP Date today=%s header=%s\n", today_key, date_header.c_str());
+  return true;
 }
 
 time_t parse_date(const char *date) {
@@ -494,6 +550,10 @@ bool sync_from_cloud() {
     HTTPClient http;
     http.setTimeout(20000);
     http.setReuse(false);
+    http.useHTTP10(true);
+    http.addHeader("Connection", "close");
+    const char *header_keys[] = {"Date"};
+    http.collectHeaders(header_keys, 1);
     if (!begin_lifetodo_http(http, plain_client, client, url)) {
       LOG_SERIAL.printf("LifeTodo API HTTP begin failed attempt=%u\n", attempt);
       lv_label_set_text(status_label, "同步失败");
@@ -502,16 +562,19 @@ bool sync_from_cloud() {
     }
 
     int code = http.GET();
+    String date_header = http.header("Date");
     String payload = http.getString();
     http.end();
 
     if (code != 200) {
-      LOG_SERIAL.printf("LifeTodo API GET failed attempt=%u code=%d payload=%s\n", attempt, code, payload.c_str());
+      LOG_SERIAL.printf("LifeTodo API GET failed attempt=%u code=%d error=%s payload=%s\n",
+                        attempt, code, http.errorToString(code).c_str(), payload.c_str());
       lv_label_set_text(status_label, "同步重试");
       delay(CLOUD_SYNC_RETRY_DELAY_MS);
       continue;
     }
 
+    update_today_from_http_date(date_header);
     bool ok = apply_cloud_document(payload);
     if (ok) {
       update_summary();
@@ -545,21 +608,84 @@ bool push_completion_to_cloud(const char *task_id, bool completed) {
   HTTPClient http;
   String url = completions_api_url();
   LOG_SERIAL.printf("LifeTodo API POST url=%s\n", url.c_str());
+  http.setTimeout(20000);
+  http.setReuse(false);
+  http.useHTTP10(true);
   if (!begin_lifetodo_http(http, plain_client, client, url)) {
     LOG_SERIAL.println("LifeTodo API POST begin failed");
     return false;
   }
   http.addHeader("Content-Type", "application/json");
+  http.addHeader("Connection", "close");
   int code = http.POST(payload);
   String response = http.getString();
   http.end();
 
   if (code < 200 || code >= 300) {
-    LOG_SERIAL.printf("LifeTodo API POST failed code=%d payload=%s\n", code, response.c_str());
+    LOG_SERIAL.printf("LifeTodo API POST failed code=%d error=%s payload=%s\n",
+                      code, http.errorToString(code).c_str(), response.c_str());
     return false;
   }
   LOG_SERIAL.printf("LifeTodo completion updated task=%s completed=%s\n", task_id, completed ? "true" : "false");
   return true;
+}
+
+void queue_completion_sync(const char *task_id, bool completed) {
+  for (size_t i = 0; i < pending_completion_count; i++) {
+    if (strcmp(pending_completions[i].task_id, task_id) == 0) {
+      pending_completions[i].completed = completed;
+      pending_completions[i].attempts = 0;
+      pending_completions[i].next_try_ms = millis() + 700;
+      return;
+    }
+  }
+
+  if (pending_completion_count >= MAX_PENDING_COMPLETIONS) {
+    pending_completion_count = MAX_PENDING_COMPLETIONS - 1;
+    for (size_t i = 0; i + 1 < pending_completion_count; i++) {
+      pending_completions[i] = pending_completions[i + 1];
+    }
+  }
+
+  PendingCompletion &item = pending_completions[pending_completion_count++];
+  copy_text(item.task_id, sizeof(item.task_id), task_id);
+  item.completed = completed;
+  item.attempts = 0;
+  item.next_try_ms = millis() + 700;
+}
+
+void remove_pending_completion(size_t index) {
+  if (index >= pending_completion_count) return;
+  for (size_t i = index; i + 1 < pending_completion_count; i++) {
+    pending_completions[i] = pending_completions[i + 1];
+  }
+  pending_completion_count--;
+}
+
+void process_pending_completion_sync() {
+  if (pending_completion_count == 0 || WiFi.status() != WL_CONNECTED) return;
+
+  uint32_t now_ms = millis();
+  PendingCompletion &item = pending_completions[0];
+  if (now_ms < item.next_try_ms) return;
+
+  lv_label_set_text(status_label, "正在同步更改");
+  bool ok = push_completion_to_cloud(item.task_id, item.completed);
+  if (ok) {
+    remove_pending_completion(0);
+    lv_label_set_text(status_label, pending_completion_count == 0 ? "飞书已连接" : "继续同步");
+    return;
+  }
+
+  item.attempts++;
+  if (item.attempts >= 4) {
+    lv_label_set_text(status_label, "同步稍后重试");
+    item.attempts = 0;
+    item.next_try_ms = now_ms + 30000;
+  } else {
+    lv_label_set_text(status_label, "同步重试");
+    item.next_try_ms = now_ms + 3000;
+  }
 }
 
 void flush_display(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_p) {
@@ -604,34 +730,33 @@ uint8_t remaining_count() {
 
 void update_summary() {
   static char buffer[96];
-  snprintf(buffer, sizeof(buffer), "%u 件待完成", remaining_count());
+  uint8_t remaining = remaining_count();
+  if (task_count == 0) {
+    snprintf(buffer, sizeof(buffer), cloud_ready ? "今天没有待办" : "正在连接飞书");
+  } else if (remaining == 0) {
+    snprintf(buffer, sizeof(buffer), "全部完成 · 共 %u 件", static_cast<unsigned>(task_count));
+  } else {
+    snprintf(buffer, sizeof(buffer), "%u 件待完成 · 共 %u 件", remaining, static_cast<unsigned>(task_count));
+  }
   lv_label_set_text(summary_label, buffer);
 }
 
 void style_panel(lv_obj_t *obj, uint32_t color, bool done) {
-  lv_color_t bg = lv_color_hex(done ? 0xe9e4db : 0xfffdfa);
-  lv_color_t border = lv_color_hex(done ? 0xc7c0b5 : color);
-  lv_opa_t bg_opa = done ? LV_OPA_70 : LV_OPA_COVER;
-  lv_coord_t border_width = 4;
-  lv_coord_t shadow_width = done ? 0 : 8;
-  lv_opa_t shadow_opa = done ? LV_OPA_TRANSP : LV_OPA_20;
+  lv_color_t bg = lv_color_hex(done ? 0xf0eee8 : 0xffffff);
+  lv_color_t border = lv_color_hex(done ? 0xe0dacf : 0xeee7da);
 
-  lv_obj_set_style_radius(obj, 8, 0);
+  lv_obj_set_style_radius(obj, 10, 0);
   lv_obj_set_style_bg_color(obj, bg, 0);
-  lv_obj_set_style_bg_opa(obj, bg_opa, 0);
+  lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, 0);
   lv_obj_set_style_border_color(obj, border, 0);
-  lv_obj_set_style_border_width(obj, border_width, 0);
-  lv_obj_set_style_pad_all(obj, 14, 0);
-  lv_obj_set_style_shadow_width(obj, shadow_width, 0);
+  lv_obj_set_style_border_width(obj, 1, 0);
+  lv_obj_set_style_pad_all(obj, 0, 0);
+  lv_obj_set_style_shadow_width(obj, done ? 0 : 5, 0);
   lv_obj_set_style_shadow_color(obj, lv_color_hex(color), 0);
-  lv_obj_set_style_shadow_opa(obj, shadow_opa, 0);
+  lv_obj_set_style_shadow_opa(obj, done ? LV_OPA_TRANSP : LV_OPA_10, 0);
 
-  lv_obj_set_style_bg_color(obj, bg, LV_STATE_PRESSED);
-  lv_obj_set_style_bg_opa(obj, bg_opa, LV_STATE_PRESSED);
-  lv_obj_set_style_border_color(obj, border, LV_STATE_PRESSED);
-  lv_obj_set_style_border_width(obj, border_width, LV_STATE_PRESSED);
-  lv_obj_set_style_shadow_width(obj, shadow_width, LV_STATE_PRESSED);
-  lv_obj_set_style_shadow_opa(obj, shadow_opa, LV_STATE_PRESSED);
+  lv_obj_set_style_bg_color(obj, lv_color_hex(done ? 0xe9e4db : 0xf8f4ec), LV_STATE_PRESSED);
+  lv_obj_set_style_shadow_width(obj, 0, LV_STATE_PRESSED);
 }
 
 void apply_task_view(size_t index) {
@@ -639,56 +764,105 @@ void apply_task_view(size_t index) {
 
   Task &item = tasks[index];
   TaskView &view = task_views[index];
-  if (!view.card || !view.member || !view.title || !view.status) return;
+  if (!view.card || !view.accent || !view.check || !view.member || !view.title || !view.label || !view.status) return;
 
   style_panel(view.card, item.color, item.done);
+  lv_obj_set_style_bg_color(view.accent, lv_color_hex(item.done ? 0xc8c0b4 : item.color), 0);
+  lv_obj_set_style_bg_color(view.check, lv_color_hex(item.done ? 0x2f7d4f : 0xf7f1e7), 0);
+  lv_obj_set_style_border_color(view.check, lv_color_hex(item.done ? 0x2f7d4f : item.color), 0);
   lv_obj_set_style_text_color(view.member, lv_color_hex(item.done ? 0x8d857b : item.color), 0);
   lv_obj_set_style_text_color(view.title, lv_color_hex(item.done ? 0x8b8378 : 0x171512), 0);
-  lv_obj_set_style_text_color(view.status, lv_color_hex(item.done ? 0x2f7d4f : item.color), 0);
-  lv_label_set_text(view.status, item.done ? "已完成" : "待做");
+  lv_obj_set_style_text_color(view.label, lv_color_hex(0x8f8678), 0);
+  lv_obj_set_style_text_color(view.status, lv_color_hex(item.done ? 0xffffff : item.color), 0);
+  lv_label_set_text(view.status, item.done ? "✓" : "");
   lv_obj_invalidate(view.card);
 }
 
 void render_tasks() {
   lv_obj_clean(task_grid);
+  for (size_t i = 0; i < TASK_COUNT; i++) {
+    task_views[i] = TaskView();
+  }
+
   if (task_count == 0) {
-    lv_obj_t *empty = lv_label_create(task_grid);
-    lv_label_set_text(empty, cloud_ready ? "今天没有安排" : "正在同步");
-    set_cjk_title_font(empty);
-    lv_obj_set_style_text_color(empty, lv_color_hex(0x6e675d), 0);
-    lv_obj_set_width(empty, 760);
-    lv_obj_align(empty, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_t *panel = lv_obj_create(task_grid);
+    lv_obj_set_size(panel, 744, 236);
+    make_static_touch_obj(panel);
+    lv_obj_set_style_radius(panel, 12, 0);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_bg_opa(panel, LV_OPA_80, 0);
+    lv_obj_set_style_border_color(panel, lv_color_hex(0xeee7da), 0);
+    lv_obj_set_style_border_width(panel, 1, 0);
+    lv_obj_set_style_pad_all(panel, 26, 0);
+
+    lv_obj_t *title = lv_label_create(panel);
+    lv_label_set_text(title, cloud_ready ? "今天没有安排" : "正在同步飞书");
+    set_cjk_title_font(title);
+    lv_obj_set_style_text_color(title, lv_color_hex(0x171512), 0);
+    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 10);
+
+    lv_obj_t *body = lv_label_create(panel);
+    lv_label_set_text(body, cloud_ready ? "可以放心做自己的事，新的家庭事项会自动出现。" : "保持设备联网，稍后会自动刷新。");
+    set_cjk_font(body);
+    lv_obj_set_width(body, 680);
+    lv_label_set_long_mode(body, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_color(body, lv_color_hex(0x776f64), 0);
+    lv_obj_align(body, LV_ALIGN_TOP_LEFT, 0, 68);
     return;
   }
 
   for (size_t i = 0; i < task_count; i++) {
     Task &item = tasks[i];
     lv_obj_t *btn = lv_obj_create(task_grid);
-    lv_obj_set_size(btn, 360, 108);
+    lv_obj_set_size(btn, 744, 86);
     lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
     make_static_touch_obj(btn);
-    lv_obj_add_event_cb(btn, task_click, LV_EVENT_PRESSED, &item);
+    lv_obj_add_event_cb(btn, task_click, LV_EVENT_CLICKED, &item);
     task_views[i].card = btn;
+
+    lv_obj_t *accent = lv_obj_create(btn);
+    lv_obj_set_size(accent, 7, 86);
+    lv_obj_align(accent, LV_ALIGN_LEFT_MID, 0, 0);
+    make_static_touch_obj(accent);
+    lv_obj_set_style_radius(accent, 0, 0);
+    lv_obj_set_style_border_width(accent, 0, 0);
+    task_views[i].accent = accent;
+
+    lv_obj_t *check = lv_obj_create(btn);
+    lv_obj_set_size(check, 42, 42);
+    lv_obj_align(check, LV_ALIGN_LEFT_MID, 24, 0);
+    make_static_touch_obj(check);
+    lv_obj_set_style_radius(check, 21, 0);
+    lv_obj_set_style_border_width(check, 2, 0);
+    task_views[i].check = check;
+
+    lv_obj_t *done = lv_label_create(check);
+    lv_obj_set_style_text_font(done, &lv_font_montserrat_24, 0);
+    lv_obj_center(done);
+    task_views[i].status = done;
 
     lv_obj_t *member = lv_label_create(btn);
     lv_label_set_text(member, item.member);
-    lv_obj_set_width(member, 130);
+    lv_obj_set_width(member, 110);
     set_cjk_font(member);
-    lv_obj_align(member, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_align(member, LV_ALIGN_TOP_RIGHT, -22, 15);
     task_views[i].member = member;
 
     lv_obj_t *title = lv_label_create(btn);
     lv_label_set_text(title, item.title);
-    lv_obj_set_width(title, 248);
+    lv_obj_set_width(title, 470);
     set_cjk_title_font(title);
-    lv_obj_align(title, LV_ALIGN_LEFT_MID, 0, 14);
+    lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
+    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 82, 12);
     task_views[i].title = title;
 
-    lv_obj_t *done = lv_label_create(btn);
-    lv_obj_set_width(done, 108);
-    set_cjk_font(done);
-    lv_obj_align(done, LV_ALIGN_RIGHT_MID, -4, 0);
-    task_views[i].status = done;
+    lv_obj_t *label = lv_label_create(btn);
+    lv_label_set_text(label, item.label);
+    lv_obj_set_width(label, 470);
+    set_cjk_font(label);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 82, 48);
+    task_views[i].label = label;
 
     apply_task_view(i);
   }
@@ -705,28 +879,32 @@ void task_click(lv_event_t *event) {
   LOG_SERIAL.printf("Task toggled id=%s done=%s\n", task->id, task->done ? "true" : "false");
   update_summary();
 
-  for (size_t i = 0; i < TASK_COUNT; i++) {
+  for (size_t i = 0; i < task_count; i++) {
     if (&tasks[i] == task) {
       apply_task_view(i);
       break;
     }
   }
 
-  push_completion_to_cloud(task->id, task->done);
+  lv_label_set_text(status_label, "待同步");
+  queue_completion_sync(task->id, task->done);
 }
 
 void build_task_grid() {
   task_grid = lv_obj_create(root);
-  lv_obj_set_size(task_grid, 760, 272);
-  lv_obj_align(task_grid, LV_ALIGN_TOP_MID, 0, 138);
-  disable_scroll(task_grid);
+  lv_obj_set_size(task_grid, 760, 302);
+  lv_obj_align(task_grid, LV_ALIGN_TOP_MID, 0, 118);
+  lv_obj_add_flag(task_grid, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scroll_dir(task_grid, LV_DIR_VER);
+  lv_obj_set_scrollbar_mode(task_grid, LV_SCROLLBAR_MODE_AUTO);
+  lv_obj_clear_flag(task_grid, LV_OBJ_FLAG_SCROLL_CHAIN | LV_OBJ_FLAG_SCROLL_MOMENTUM);
   lv_obj_set_style_bg_opa(task_grid, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(task_grid, 0, 0);
-  lv_obj_set_flex_flow(task_grid, LV_FLEX_FLOW_ROW_WRAP);
-  lv_obj_set_flex_align(task_grid, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+  lv_obj_set_flex_flow(task_grid, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(task_grid, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
   lv_obj_set_style_pad_all(task_grid, 0, 0);
-  lv_obj_set_style_pad_row(task_grid, 12, 0);
-  lv_obj_set_style_pad_column(task_grid, 16, 0);
+  lv_obj_set_style_pad_row(task_grid, 10, 0);
+  lv_obj_set_style_pad_column(task_grid, 0, 0);
 
   render_tasks();
 }
@@ -769,7 +947,6 @@ void set_brightness_panel_open(bool open) {
   if (open) {
     update_control_center_status();
   }
-  lv_obj_set_y(brightness_panel, open ? 22 : -456);
   lv_obj_clear_flag(brightness_panel, LV_OBJ_FLAG_HIDDEN);
   if (open) {
     lv_obj_add_flag(brightness_overlay, LV_OBJ_FLAG_CLICKABLE);
@@ -778,6 +955,17 @@ void set_brightness_panel_open(bool open) {
   }
   lv_obj_move_foreground(brightness_overlay);
   lv_obj_move_foreground(brightness_panel);
+
+  lv_anim_t anim;
+  lv_anim_init(&anim);
+  lv_anim_set_var(&anim, brightness_panel);
+  lv_anim_set_values(&anim, lv_obj_get_y(brightness_panel), open ? 22 : -456);
+  lv_anim_set_time(&anim, 180);
+  lv_anim_set_path_cb(&anim, lv_anim_path_ease_out);
+  lv_anim_set_exec_cb(&anim, [](void *obj, int32_t value) {
+    lv_obj_set_y(static_cast<lv_obj_t *>(obj), value);
+  });
+  lv_anim_start(&anim);
 }
 
 void control_wifi_event(lv_event_t *) {
@@ -832,9 +1020,9 @@ void build_brightness_controls() {
   lv_obj_set_size(brightness_panel, 760, 430);
   lv_obj_align(brightness_panel, LV_ALIGN_TOP_MID, 0, -456);
   make_static_touch_obj(brightness_panel);
-  lv_obj_set_style_radius(brightness_panel, 28, 0);
+  lv_obj_set_style_radius(brightness_panel, 18, 0);
   lv_obj_set_style_bg_color(brightness_panel, lv_color_hex(0x2f312f), 0);
-  lv_obj_set_style_bg_opa(brightness_panel, LV_OPA_80, 0);
+  lv_obj_set_style_bg_opa(brightness_panel, LV_OPA_90, 0);
   lv_obj_set_style_border_color(brightness_panel, lv_color_hex(0xffffff), 0);
   lv_obj_set_style_border_opa(brightness_panel, LV_OPA_20, 0);
   lv_obj_set_style_border_width(brightness_panel, 1, 0);
@@ -1441,7 +1629,12 @@ bool connect_wifi_with_credentials(const String &ssid, const String &password) {
     return false;
   }
 
-  LOG_SERIAL.printf("WiFi connected ip=%s\n", WiFi.localIP().toString().c_str());
+  LOG_SERIAL.printf("WiFi connected ssid=%s ip=%s gateway=%s dns=%s rssi=%d\n",
+                    WiFi.SSID().c_str(),
+                    WiFi.localIP().toString().c_str(),
+                    WiFi.gatewayIP().toString().c_str(),
+                    WiFi.dnsIP().toString().c_str(),
+                    WiFi.RSSI());
   stop_wifi_provisioning();
   configTzTime("CST-8", "pool.ntp.org", "time.nist.gov");
   update_today_key();
@@ -1581,12 +1774,13 @@ void loop() {
     wifi_connect_pending = false;
     connect_saved_wifi();
   }
+  process_pending_completion_sync();
   if (millis() - last_heartbeat_ms > 5000) {
     LOG_SERIAL.printf("Heartbeat heap=%u psram=%u wifi=%d remaining=%u\n",
                       ESP.getFreeHeap(), ESP.getFreePsram(), WiFi.status(), remaining_count());
     last_heartbeat_ms = millis();
   }
-  if (!provisioning_active && WiFi.status() == WL_CONNECTED && millis() - last_cloud_sync_ms > CLOUD_SYNC_INTERVAL_MS) {
+  if (pending_completion_count == 0 && !provisioning_active && WiFi.status() == WL_CONNECTED && millis() - last_cloud_sync_ms > CLOUD_SYNC_INTERVAL_MS) {
     last_cloud_sync_ms = millis();
     sync_from_cloud();
   }
