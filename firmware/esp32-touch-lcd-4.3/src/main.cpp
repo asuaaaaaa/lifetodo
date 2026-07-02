@@ -94,6 +94,7 @@ lv_obj_t *wifi_setup_panel;
 lv_obj_t *wifi_setup_title;
 lv_obj_t *wifi_setup_body;
 lv_obj_t *wifi_setup_hint;
+lv_obj_t *wifi_setup_steps;
 uint32_t last_heartbeat_ms = 0;
 uint32_t last_touch_log_ms = 0;
 uint32_t last_cloud_sync_ms = 0;
@@ -107,6 +108,8 @@ char today_key[11] = "2026-07-01";
 String pending_wifi_ssid;
 String pending_wifi_password;
 String provisioning_ap_ssid;
+String scanned_wifi_options;
+uint32_t last_wifi_scan_ms = 0;
 
 Preferences wifi_preferences;
 DNSServer dns_server;
@@ -792,14 +795,15 @@ void set_wifi_setup_visible(bool visible, const char *title, const char *body, c
   lv_label_set_text(wifi_setup_title, title ? title : "Wi-Fi 配网");
   lv_label_set_text(wifi_setup_body, body ? body : "");
   lv_label_set_text(wifi_setup_hint, hint ? hint : "");
+  lv_label_set_text(wifi_setup_steps, "1 CONNECT AP\n2 OPEN 192.168.4.1\n3 SELECT Wi-Fi");
   lv_obj_clear_flag(wifi_setup_panel, LV_OBJ_FLAG_HIDDEN);
   lv_obj_move_foreground(wifi_setup_panel);
 }
 
 void build_wifi_setup_panel() {
   wifi_setup_panel = lv_obj_create(root);
-  lv_obj_set_size(wifi_setup_panel, 560, 236);
-  lv_obj_align(wifi_setup_panel, LV_ALIGN_CENTER, 0, 24);
+  lv_obj_set_size(wifi_setup_panel, 640, 300);
+  lv_obj_align(wifi_setup_panel, LV_ALIGN_CENTER, 0, 16);
   make_static_touch_obj(wifi_setup_panel);
   lv_obj_clear_flag(wifi_setup_panel, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_set_style_radius(wifi_setup_panel, 8, 0);
@@ -811,23 +815,30 @@ void build_wifi_setup_panel() {
   wifi_setup_title = lv_label_create(wifi_setup_panel);
   set_cjk_title_font(wifi_setup_title);
   lv_obj_set_style_text_color(wifi_setup_title, lv_color_hex(0xfffdfa), 0);
-  lv_obj_set_width(wifi_setup_title, 516);
+  lv_obj_set_width(wifi_setup_title, 596);
   lv_label_set_long_mode(wifi_setup_title, LV_LABEL_LONG_WRAP);
   lv_obj_align(wifi_setup_title, LV_ALIGN_TOP_LEFT, 0, 0);
 
   wifi_setup_body = lv_label_create(wifi_setup_panel);
   lv_obj_set_style_text_font(wifi_setup_body, &lv_font_montserrat_24, 0);
   lv_obj_set_style_text_color(wifi_setup_body, lv_color_hex(0xf1c45b), 0);
-  lv_obj_set_width(wifi_setup_body, 516);
+  lv_obj_set_width(wifi_setup_body, 596);
   lv_label_set_long_mode(wifi_setup_body, LV_LABEL_LONG_WRAP);
-  lv_obj_align(wifi_setup_body, LV_ALIGN_TOP_LEFT, 0, 70);
+  lv_obj_align(wifi_setup_body, LV_ALIGN_TOP_LEFT, 0, 56);
+
+  wifi_setup_steps = lv_label_create(wifi_setup_panel);
+  lv_obj_set_style_text_font(wifi_setup_steps, &lv_font_montserrat_24, 0);
+  lv_obj_set_style_text_color(wifi_setup_steps, lv_color_hex(0xfffdfa), 0);
+  lv_obj_set_width(wifi_setup_steps, 596);
+  lv_label_set_long_mode(wifi_setup_steps, LV_LABEL_LONG_WRAP);
+  lv_obj_align(wifi_setup_steps, LV_ALIGN_TOP_LEFT, 0, 112);
 
   wifi_setup_hint = lv_label_create(wifi_setup_panel);
   set_cjk_font(wifi_setup_hint);
   lv_obj_set_style_text_color(wifi_setup_hint, lv_color_hex(0xd8d0c3), 0);
-  lv_obj_set_width(wifi_setup_hint, 516);
+  lv_obj_set_width(wifi_setup_hint, 596);
   lv_label_set_long_mode(wifi_setup_hint, LV_LABEL_LONG_WRAP);
-  lv_obj_align(wifi_setup_hint, LV_ALIGN_TOP_LEFT, 0, 122);
+  lv_obj_align(wifi_setup_hint, LV_ALIGN_TOP_LEFT, 0, 228);
 
   set_wifi_setup_visible(false, "", "", "");
 }
@@ -844,6 +855,55 @@ String html_escape(const String &value) {
     else escaped += c;
   }
   return escaped;
+}
+
+String html_attr_escape(const String &value) {
+  String escaped = html_escape(value);
+  escaped.replace("'", "&#39;");
+  return escaped;
+}
+
+String wifi_encryption_label(wifi_auth_mode_t auth) {
+  return auth == WIFI_AUTH_OPEN ? "Open" : "Secured";
+}
+
+void refresh_wifi_scan_options(bool force = false) {
+  if (!force && scanned_wifi_options.length() && millis() - last_wifi_scan_ms < 30000) {
+    return;
+  }
+
+  LOG_SERIAL.println("Scanning WiFi networks for provisioning page");
+  int count = WiFi.scanNetworks(false, true);
+  last_wifi_scan_ms = millis();
+  scanned_wifi_options = "";
+
+  if (count <= 0) {
+    scanned_wifi_options = F("<option value=''>未扫描到 Wi-Fi，请手动输入</option>");
+    return;
+  }
+
+  String seen = "|";
+  for (int i = 0; i < count; i++) {
+    String ssid = WiFi.SSID(i);
+    if (ssid.isEmpty()) continue;
+    String marker = "|" + ssid + "|";
+    if (seen.indexOf(marker) >= 0) continue;
+    seen += ssid + "|";
+
+    scanned_wifi_options += F("<option value='");
+    scanned_wifi_options += html_attr_escape(ssid);
+    scanned_wifi_options += F("'>");
+    scanned_wifi_options += html_escape(ssid);
+    scanned_wifi_options += F(" · ");
+    scanned_wifi_options += WiFi.RSSI(i);
+    scanned_wifi_options += F(" dBm · ");
+    scanned_wifi_options += wifi_encryption_label(WiFi.encryptionType(i));
+    scanned_wifi_options += F("</option>");
+  }
+
+  if (!scanned_wifi_options.length()) {
+    scanned_wifi_options = F("<option value=''>未扫描到可见 Wi-Fi，请手动输入</option>");
+  }
 }
 
 String saved_wifi_ssid() {
@@ -868,6 +928,11 @@ void save_wifi_credentials(const String &ssid, const String &password) {
 }
 
 void send_wifi_setup_page() {
+  if (wifi_server.hasArg("rescan")) {
+    refresh_wifi_scan_options(true);
+  } else {
+    refresh_wifi_scan_options(false);
+  }
   String current_ssid = saved_wifi_ssid();
   String page =
       F("<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'>"
@@ -877,17 +942,23 @@ void send_wifi_setup_page() {
         "main{max-width:520px;margin:0 auto;padding:28px 20px}"
         "h1{font-size:30px;margin:8px 0 10px}.muted{color:#6e675d;line-height:1.55}"
         "form{margin-top:24px}label{display:block;margin:16px 0 8px;font-weight:700}"
-        "input{box-sizing:border-box;width:100%;height:52px;border:2px solid #d8d0c3;border-radius:8px;padding:0 14px;font-size:18px;background:#fffdfa}"
+        "input,select{box-sizing:border-box;width:100%;height:52px;border:2px solid #d8d0c3;border-radius:8px;padding:0 14px;font-size:18px;background:#fffdfa;color:#171512}"
         "button{width:100%;height:54px;margin-top:24px;border:0;border-radius:8px;background:#171512;color:#fffdfa;font-size:18px;font-weight:700}"
-        ".chip{display:inline-block;margin-top:14px;padding:8px 12px;border-radius:8px;background:#efe7d7;color:#171512}"
+        ".chip,.link{display:inline-block;margin-top:14px;padding:8px 12px;border-radius:8px;background:#efe7d7;color:#171512;text-decoration:none}"
+        ".hint{font-size:14px;color:#6e675d;margin-top:8px}"
         "</style></head><body><main><h1>LifeTodo 配网</h1>"
-        "<p class='muted'>选择家里的 Wi-Fi，提交后设备会自动保存并连接。连接成功后屏幕会回到今日任务。</p>");
+        "<p class='muted'>选择家里的 Wi-Fi，输入密码后提交。设备会自动保存并连接，成功后屏幕回到今日任务。</p>");
   page += F("<span class='chip'>设备热点 ");
   page += html_escape(provisioning_ap_ssid);
-  page += F("</span><form method='post' action='/api/wifi'>"
-            "<label>Wi-Fi 名称</label><input name='ssid' required maxlength='32' value='");
+  page += F("</span> <a class='link' href='/?rescan=1'>重新扫描</a>"
+            "<form method='post' action='/api/wifi'>"
+            "<label>选择 Wi-Fi</label><select name='ssid_select'>");
+  page += scanned_wifi_options;
+  page += F("<option value=''>手动输入其他 Wi-Fi</option></select>"
+            "<label>手动输入 Wi-Fi 名称</label><input name='ssid_manual' maxlength='32' placeholder='未列出时填写' value='");
   page += html_escape(current_ssid);
-  page += F("'><label>Wi-Fi 密码</label><input name='password' type='password' maxlength='64'>"
+  page += F("'><p class='hint'>优先使用上方选择；如果选择“手动输入其他 Wi-Fi”，则使用这里填写的名称。</p>"
+            "<label>Wi-Fi 密码</label><input name='password' type='password' maxlength='64' autocomplete='current-password'>"
             "<button type='submit'>保存并连接</button></form></main></body></html>");
   wifi_server.send(200, "text/html; charset=utf-8", page);
 }
@@ -904,7 +975,10 @@ void handle_wifi_status_api() {
 }
 
 void handle_wifi_submit() {
-  String ssid = wifi_server.arg("ssid");
+  String ssid = wifi_server.arg("ssid_select");
+  if (ssid.isEmpty()) {
+    ssid = wifi_server.arg("ssid_manual");
+  }
   String password = wifi_server.arg("password");
   ssid.trim();
   if (ssid.isEmpty()) {
@@ -951,6 +1025,7 @@ void start_wifi_provisioning() {
   WiFi.mode(WIFI_AP_STA);
   bool ap_ok = WiFi.softAP(provisioning_ap_ssid.c_str());
   IPAddress ap_ip = WiFi.softAPIP();
+  refresh_wifi_scan_options(true);
   dns_server.start(DNS_PORT, "*", ap_ip);
   configure_wifi_server_routes();
   wifi_server.begin();
