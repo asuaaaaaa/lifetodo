@@ -1,6 +1,6 @@
 # GitHub Actions 部署到阿里云
 
-目标：推送到 GitHub `main` 分支后，自动生成 H5 产物并部署到阿里云轻量应用服务器的 Nginx 站点目录。
+目标：推送到 GitHub `main` 分支后，自动生成 H5 产物，上传 Node API 运行时代码，并部署到阿里云轻量应用服务器。
 
 当前服务器：
 
@@ -36,6 +36,15 @@ server {
   location /device/ {
     try_files $uri $uri/ /device/index.html;
   }
+
+  location /api/ {
+    proxy_pass http://127.0.0.1:8787;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
 }
 ```
 
@@ -57,11 +66,66 @@ ALIYUN_PORT          SSH 端口，通常是 22
 ALIYUN_USER          admin
 ALIYUN_SSH_KEY       部署用户的私钥内容
 ALIYUN_DEPLOY_PATH   /var/www/lifetodo/dist/site
+ALIYUN_APP_PATH      /var/www/lifetodo
 ```
 
-`ALIYUN_PORT` 和 `ALIYUN_DEPLOY_PATH` 有默认值，但建议显式配置。
+`ALIYUN_PORT`、`ALIYUN_DEPLOY_PATH` 和 `ALIYUN_APP_PATH` 有默认值，但建议显式配置。
 
-## 3. SSH Key 建议
+## 3. Node API 服务
+
+GitHub Actions 会上传：
+
+```text
+api/
+package.json
+```
+
+到 `ALIYUN_APP_PATH`。服务器上还需要先配置一次 systemd 服务和飞书 CLI 授权。
+
+环境变量：
+
+```bash
+sudo tee /etc/lifetodo-api.env >/dev/null <<'EOF'
+PORT=8787
+LIFETODO_HOME_ID=demo-home
+LIFETODO_LARK_BASE_TOKEN=L6kdbumDKa8QFosicOIcItBjncb
+LIFETODO_LARK_TODO_TABLE_ID=tblrbHrBuoijFiXK
+EOF
+```
+
+systemd 服务，把 `<deploy-user>` 替换成部署用户：
+
+```bash
+sudo tee /etc/systemd/system/lifetodo-api.service >/dev/null <<'EOF'
+[Unit]
+Description=LifeTodo Node API
+After=network.target
+
+[Service]
+Type=simple
+User=<deploy-user>
+WorkingDirectory=/var/www/lifetodo
+EnvironmentFile=/etc/lifetodo-api.env
+ExecStart=/usr/bin/node api/server.mjs
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now lifetodo-api
+```
+
+服务器上还要让同一个部署用户完成飞书授权：
+
+```bash
+lark-cli auth login --domain base
+lark-cli auth status
+```
+
+## 4. SSH Key 建议
 
 在本机生成一把专门用于部署的 key，或在轻量应用服务器上生成后取回私钥：
 
@@ -104,7 +168,7 @@ ALIYUN_SSH_KEY
 
 注意：GitHub Secrets 里填私钥，轻量应用服务器里放公钥。不要把私钥提交到仓库，也不要把私钥发到聊天或文档中。
 
-## 4. 触发部署
+## 5. 触发部署
 
 把代码推到 GitHub `main` 分支：
 
@@ -118,13 +182,13 @@ git push origin main
 Deploy to Aliyun -> Run workflow
 ```
 
-## 5. 验证
+## 6. 验证
 
 部署成功后访问：
 
 ```text
-https://lifetodo.xyz/app/?home=demo-home
-https://lifetodo.xyz/device/?home=demo-home&device=entry
+http://120.55.46.251/api/state?home=demo-home
+http://120.55.46.251/device/?home=demo-home&device=entry
 ```
 
-页面显示 `Firebase 已连接`，并且手机页完成任务后设备页同步变化，就说明链路成功。
+API 返回 JSON，页面显示 `飞书多维表格已连接`，并且手机页完成任务后设备页同步变化，就说明链路成功。

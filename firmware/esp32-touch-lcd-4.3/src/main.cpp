@@ -22,7 +22,7 @@ LV_FONT_DECLARE(lifetodo_pingfang_28);
 #define WIFI_PASSWORD ""
 #define LIFETODO_HOME_ID "demo-home"
 #define LIFETODO_DEVICE_ID "entry"
-#define LIFETODO_BASE_URL "https://lifetodo.xyz"
+#define LIFETODO_BASE_URL "http://120.55.46.251"
 #endif
 
 #if ARDUINO_USB_CDC_ON_BOOT

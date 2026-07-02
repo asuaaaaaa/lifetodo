@@ -8,4 +8,4 @@
 
 #define LIFETODO_HOME_ID "demo-home"
 #define LIFETODO_DEVICE_ID "entry"
-#define LIFETODO_BASE_URL "https://lifetodo.xyz"
+#define LIFETODO_BASE_URL "http://120.55.46.251"

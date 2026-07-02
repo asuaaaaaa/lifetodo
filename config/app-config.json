@@ -1,10 +1,10 @@
 {
   "domain": "lifetodo.xyz",
   "aliyunServerIp": "120.55.46.251",
-  "baseUrl": "https://lifetodo.xyz",
+  "baseUrl": "http://120.55.46.251",
   "appUrl": "https://lifetodo.xyz/app/",
-  "deviceUrlPattern": "https://lifetodo.xyz/device/?home={homeId}&device={deviceId}",
-  "apiUrl": "https://lifetodo.xyz/api",
+  "deviceUrlPattern": "http://120.55.46.251/device/?home={homeId}&device={deviceId}",
+  "apiUrl": "http://120.55.46.251/api",
   "larkBaseToken": "L6kdbumDKa8QFosicOIcItBjncb",
   "larkTodoTableId": "tblrbHrBuoijFiXK",
   "defaultHomeId": "demo-home"

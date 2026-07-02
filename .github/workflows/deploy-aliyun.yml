@@ -22,6 +22,8 @@ jobs:
 
       - name: Check JavaScript
         run: |
+          node --check api/server.mjs
+          node --check api/lark-base-store.mjs
           node --check apps/pwa-prototype/app.js
           node --check apps/pwa-prototype/lifetodo-store.js
           node --check scripts/prepare-static-deploy.mjs
@@ -42,7 +44,18 @@ jobs:
           # overwrite: true
           rm: true
 
-      - name: Reload Nginx
+      - name: Upload API runtime to Aliyun lightweight server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.ALIYUN_HOST }}
+          port: ${{ secrets.ALIYUN_PORT || 22 }}
+          username: ${{ secrets.ALIYUN_USER }}
+          key: ${{ secrets.ALIYUN_SSH_KEY }}
+          source: "api,package.json"
+          target: ${{ secrets.ALIYUN_APP_PATH || '/var/www/lifetodo' }}
+          rm: false
+
+      - name: Restart API and reload Nginx
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.ALIYUN_HOST }}
@@ -50,6 +63,13 @@ jobs:
           username: ${{ secrets.ALIYUN_USER }}
           key: ${{ secrets.ALIYUN_SSH_KEY }}
           script: |
+            if sudo systemctl list-unit-files lifetodo-api.service >/dev/null 2>&1; then
+              sudo systemctl restart lifetodo-api
+              sudo systemctl --no-pager --full status lifetodo-api
+            else
+              echo "lifetodo-api.service is not installed yet; skipping API restart"
+            fi
+
             if command -v nginx >/dev/null 2>&1; then
               sudo nginx -t
               if sudo systemctl is-active --quiet nginx; then

@@ -26,11 +26,10 @@ http://localhost:8787/
 http://localhost:8787/device.html?home=demo-home&device=entry-screen
 ```
 
-线上使用时，网页端和 ESP32 都访问：
+备案和 HTTPS 就绪前，ESP32 先访问服务器 IP：
 
 ```text
-https://lifetodo.xyz/
-https://lifetodo.xyz/device/?home=demo-home&device=entry-screen
+http://120.55.46.251/device/?home=demo-home&device=entry-screen
 ```
 
 ## API
@@ -47,15 +46,17 @@ https://lifetodo.xyz/device/?home=demo-home&device=entry-screen
 ```c
 #define LIFETODO_HOME_ID "demo-home"
 #define LIFETODO_DEVICE_ID "entry-screen"
-#define LIFETODO_BASE_URL "https://lifetodo.xyz"
+#define LIFETODO_BASE_URL "http://120.55.46.251"
 ```
 
 设备同步走 `GET /api/state`，点击完成走 `POST /api/completions`。
 
-ESP32 不使用 `localhost`。开发和正式使用都可以直接连 `https://lifetodo.xyz`，前提是线上服务已经部署本项目的 Node API，并设置：
+ESP32 不使用 `localhost`。现在先连 `http://120.55.46.251`，前提是线上服务已经部署本项目的 Node API，并设置：
 
 ```bash
 LIFETODO_LARK_BASE_TOKEN=L6kdbumDKa8QFosicOIcItBjncb
 LIFETODO_LARK_TODO_TABLE_ID=tblrbHrBuoijFiXK
 LIFETODO_HOME_ID=demo-home
 ```
+
+域名备案和 HTTPS 配好后，再把 `LIFETODO_BASE_URL` 改回 `https://lifetodo.xyz`。
