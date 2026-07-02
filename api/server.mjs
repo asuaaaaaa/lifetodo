@@ -70,10 +70,16 @@ export function createApiHandler({ store, seed = defaultSeed, now = () => new Da
 export function createLifeTodoServer({ store = createLarkBaseStore(), seed = defaultSeed, now } = {}) {
   const apiHandler = createApiHandler({ store, seed, now });
   return createHttpServer(async (request, response) => {
-    const url = new URL(request.url, "http://localhost");
-    const apiResponse = url.pathname.startsWith("/api/") ? await apiHandler(toWebRequest(request)) : await staticResponse(url);
-    response.writeHead(apiResponse.status, Object.fromEntries(apiResponse.headers));
-    response.end(Buffer.from(await apiResponse.arrayBuffer()));
+    try {
+      const url = new URL(request.url, "http://localhost");
+      const apiResponse = url.pathname.startsWith("/api/") ? await apiHandler(toApiRequest(request)) : await staticResponse(url);
+      response.writeHead(apiResponse.status, Object.fromEntries(apiResponse.headers));
+      response.end(Buffer.from(await apiResponse.arrayBuffer()));
+    } catch (error) {
+      const apiResponse = jsonResponse({ error: error.message || "Internal server error" }, 500);
+      response.writeHead(apiResponse.status, Object.fromEntries(apiResponse.headers));
+      response.end(Buffer.from(await apiResponse.arrayBuffer()));
+    }
   });
 }
 
@@ -84,35 +90,69 @@ async function readOrSeed(store, homeId, seed) {
 }
 
 function jsonResponse(body, status = 200) {
-  const headers = new Headers({
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET,PUT,POST,OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
-    "Content-Type": "application/json; charset=utf-8"
+  return new SimpleResponse(body === null ? "" : JSON.stringify(body), {
+    status,
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET,PUT,POST,OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+      "Content-Type": "application/json; charset=utf-8"
+    }
   });
-  return new Response(body === null ? null : JSON.stringify(body), { status, headers });
 }
 
-function toWebRequest(request) {
-  return new Request(`http://${request.headers.host || "localhost"}${request.url}`, {
+function toApiRequest(request) {
+  return {
+    url: `http://${request.headers.host || "localhost"}${request.url}`,
     method: request.method,
     headers: request.headers,
-    body: ["GET", "HEAD"].includes(request.method || "GET") ? undefined : request,
-    duplex: "half"
-  });
+    async json() {
+      return JSON.parse(await readRequestBody(request));
+    }
+  };
 }
+
+async function readRequestBody(request) {
+  const chunks = [];
+  for await (const chunk of request) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+class SimpleResponse {
+  constructor(body = "", { status = 200, headers = {} } = {}) {
+    this.status = status;
+    this.headers = new Map(Object.entries(headers));
+    this.body = Buffer.isBuffer(body) ? body : Buffer.from(String(body));
+  }
+
+  async arrayBuffer() {
+    return this.body.buffer.slice(this.body.byteOffset, this.body.byteOffset + this.body.byteLength);
+  }
+
+  async json() {
+    return JSON.parse(this.body.toString("utf8"));
+  }
+}
+
+const defaultStaticHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET,PUT,POST,OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type"
+};
 
 async function staticResponse(url) {
   const pathname = url.pathname === "/" ? "/index.html" : url.pathname;
   const filePath = normalize(join(staticRoot, pathname));
   if (!filePath.startsWith(staticRoot)) {
-    return new Response("Not found", { status: 404 });
+    return new SimpleResponse("Not found", { status: 404 });
   }
   try {
     const body = await readFile(filePath);
-    return new Response(body, { headers: { "Content-Type": contentType(filePath) } });
+    return new SimpleResponse(body, { headers: { ...defaultStaticHeaders, "Content-Type": contentType(filePath) } });
   } catch {
-    return new Response("Not found", { status: 404 });
+    return new SimpleResponse("Not found", { status: 404 });
   }
 }
 
