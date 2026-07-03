@@ -120,6 +120,123 @@ test("writes structured TODO rows without storing a JSON state snapshot", async 
   assert.ok(!("State JSON" in json));
 });
 
+test("reads completion records from the dedicated completion table", async () => {
+  const calls = [];
+  const execFile = async (command, args) => {
+    calls.push([command, args]);
+    if (args.includes("tbl_completions")) {
+      return {
+        stdout: JSON.stringify({
+          ok: true,
+          data: {
+            data: [["litter_2026-07-03", "litter", "2026-07-03", true, "2026-07-03 08:10:00", "app-h5"]],
+            fields: ["Completion ID", "Task ID", "Date", "Completed", "Completed At", "Source"],
+            record_id_list: ["rec_completion"]
+          }
+        })
+      };
+    }
+    return {
+      stdout: JSON.stringify({
+        ok: true,
+        data: {
+          data: [Object.values(todoRow)],
+          fields: Object.keys(todoRow),
+          record_id_list: ["rec_litter"]
+        }
+      })
+    };
+  };
+
+  const store = createLarkBaseStore({
+    baseToken: "bas_demo",
+    tableId: "tbl_todos",
+    completionTableId: "tbl_completions",
+    execFile
+  });
+
+  const state = await store.readState("demo-home", { members: [], tasks: [], devices: [], completions: {} });
+
+  assert.equal(state.completions["litter_2026-07-03"].source, "app-h5");
+  assert.equal(state.completions["litter_2026-07-02"], undefined);
+  assert.ok(calls.some(([, args]) => args.includes("tbl_completions")));
+});
+
+test("writes completion records to the dedicated completion table", async () => {
+  const calls = [];
+  const execFile = async (command, args) => {
+    calls.push([command, args]);
+    if (args.includes("tbl_completions")) {
+      return {
+        stdout: JSON.stringify({
+          ok: true,
+          data: {
+            data: [["litter_2026-07-03"]],
+            fields: ["Completion ID"],
+            record_id_list: ["rec_completion"]
+          }
+        })
+      };
+    }
+    if (args.includes("+record-list")) {
+      return {
+        stdout: JSON.stringify({
+          ok: true,
+          data: {
+            data: [["litter"]],
+            fields: ["Task ID"],
+            record_id_list: ["rec_litter"]
+          }
+        })
+      };
+    }
+    return { stdout: JSON.stringify({ ok: true }) };
+  };
+
+  const store = createLarkBaseStore({
+    baseToken: "bas_demo",
+    tableId: "tbl_todos",
+    completionTableId: "tbl_completions",
+    execFile,
+    now: () => new Date("2026-07-03T08:00:00.000Z")
+  });
+
+  await store.writeState(
+    "demo-home",
+    {
+      members: [{ id: "piggy", name: "猪猪", color: "#ef7f65" }],
+      tasks: [
+        {
+          id: "litter",
+          title: "铲猫砂盆",
+          assigneeId: "piggy",
+          recurrence: { type: "intervalDays", every: 3, anchorDate: "2026-07-02" },
+          label: "每 3 天",
+          enabled: true
+        }
+      ],
+      devices: [],
+      completions: {
+        "litter_2026-07-03": {
+          taskId: "litter",
+          date: "2026-07-03",
+          completedAt: "2026-07-03T08:00:00.000Z",
+          source: "device-esp32"
+        }
+      }
+    },
+    "device-esp32"
+  );
+
+  const completionUpsert = calls.find(([, args]) => args.includes("+record-upsert") && args.includes("tbl_completions"));
+  assert.ok(completionUpsert);
+  assert.ok(completionUpsert[1].includes("--record-id"));
+  const json = JSON.parse(completionUpsert[1][completionUpsert[1].indexOf("--json") + 1]);
+  assert.equal(json["Completion ID"], "litter_2026-07-03");
+  assert.equal(json.Completed, true);
+  assert.equal(json.Source, "device-esp32");
+});
+
 test("deletes TODO records that no longer exist in app state", async () => {
   const calls = [];
   const execFile = async (command, args) => {

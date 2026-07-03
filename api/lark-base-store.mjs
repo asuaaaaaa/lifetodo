@@ -22,10 +22,19 @@ const TODO_FIELDS = [
   "Last Completed At",
   "Last Completion Source"
 ];
+const COMPLETION_FIELDS = [
+  "Completion ID",
+  "Task ID",
+  "Date",
+  "Completed",
+  "Completed At",
+  "Source"
+];
 
 export function createLarkBaseStore({
   baseToken = process.env.LIFETODO_LARK_BASE_TOKEN,
   tableId = process.env.LIFETODO_LARK_TODO_TABLE_ID || process.env.LIFETODO_LARK_TABLE_ID,
+  completionTableId = process.env.LIFETODO_LARK_COMPLETION_TABLE_ID,
   execFile = execFileDefault,
   now = () => new Date()
 } = {}) {
@@ -63,6 +72,38 @@ export function createLarkBaseStore({
     return parseItems(result.stdout);
   }
 
+  async function listCompletionRecords() {
+    if (!completionTableId) return [];
+    const args = ["base", "+record-list", "--base-token", baseToken, "--table-id", completionTableId];
+    for (const field of COMPLETION_FIELDS) {
+      args.push("--field-id", field);
+    }
+    args.push("--limit", "200", "--format", "json", "--as", "user");
+    const result = await execFile("lark-cli", args);
+    return parseItems(result.stdout);
+  }
+
+  async function listCompletionIndex() {
+    if (!completionTableId) return [];
+    const result = await execFile("lark-cli", [
+      "base",
+      "+record-list",
+      "--base-token",
+      baseToken,
+      "--table-id",
+      completionTableId,
+      "--field-id",
+      "Completion ID",
+      "--limit",
+      "200",
+      "--format",
+      "json",
+      "--as",
+      "user"
+    ]);
+    return parseItems(result.stdout);
+  }
+
   return {
     async readState(homeId, fallback = null) {
       const fallbackState = normalizeState(fallback || {});
@@ -70,7 +111,9 @@ export function createLarkBaseStore({
       const tasks = records.map(recordToTask).filter((task) => task.id);
       const members = mergeMembers(fallbackState.members, records.map(recordToMember).filter((member) => member.id));
       const completions = {};
-      for (const record of records) {
+      const completionRecords = await listCompletionRecords();
+      const completionSourceRecords = completionRecords.length ? completionRecords : records;
+      for (const record of completionSourceRecords) {
         const completion = recordToCompletion(record.fields || {});
         if (completion) {
           completions[`${completion.taskId}_${completion.date}`] = completion;
@@ -133,9 +176,62 @@ export function createLarkBaseStore({
         await execFile("lark-cli", deleteArgs);
       }
 
+      if (completionTableId) {
+        await writeCompletionRecords(normalized);
+      }
+
       return normalized;
     }
   };
+
+  async function writeCompletionRecords(state) {
+    const records = await listCompletionIndex();
+    const recordByCompletionId = new Map(records.map((record) => [readField(record.fields || {}, "Completion ID"), record]));
+    const nextCompletionIds = new Set(Object.keys(state.completions || {}));
+
+    for (const [completionId, completion] of Object.entries(state.completions || {})) {
+      const payload = completionToRecord(completionId, completion);
+      const args = [
+        "base",
+        "+record-upsert",
+        "--base-token",
+        baseToken,
+        "--table-id",
+        completionTableId,
+        "--json",
+        JSON.stringify(payload),
+        "--as",
+        "user",
+        "--format",
+        "json"
+      ];
+      const existing = recordByCompletionId.get(completionId);
+      if (existing?.record_id) {
+        args.splice(6, 0, "--record-id", existing.record_id);
+      }
+      await execFile("lark-cli", args);
+    }
+
+    const removedRecordIds = records
+      .filter((record) => !nextCompletionIds.has(readField(record.fields || {}, "Completion ID")))
+      .map((record) => record.record_id)
+      .filter(Boolean);
+    if (removedRecordIds.length) {
+      const deleteArgs = [
+        "base",
+        "+record-delete",
+        "--base-token",
+        baseToken,
+        "--table-id",
+        completionTableId
+      ];
+      for (const recordId of removedRecordIds) {
+        deleteArgs.push("--record-id", recordId);
+      }
+      deleteArgs.push("--yes", "--as", "user", "--format", "json");
+      await execFile("lark-cli", deleteArgs);
+    }
+  }
 }
 
 function recordToTask(record) {
@@ -183,13 +279,26 @@ function recordToRecurrence(fields, recurrenceType) {
 
 function recordToCompletion(fields) {
   const taskId = readField(fields, "Task ID");
-  const date = readField(fields, "Last Completed Date");
+  const date = readField(fields, "Date") || readField(fields, "Last Completed Date");
+  const completed = readBoolean(fields, "Completed", true);
+  if (!completed) return null;
   if (!taskId || !date) return null;
   return {
     taskId,
     date,
-    completedAt: readField(fields, "Last Completed At") || `${date}T00:00:00.000Z`,
-    source: readField(fields, "Last Completion Source") || "api"
+    completedAt: readField(fields, "Completed At") || readField(fields, "Last Completed At") || `${date}T00:00:00.000Z`,
+    source: readField(fields, "Source") || readField(fields, "Last Completion Source") || "api"
+  };
+}
+
+function completionToRecord(completionId, completion) {
+  return {
+    "Completion ID": completionId,
+    "Task ID": completion.taskId,
+    Date: completion.date,
+    Completed: true,
+    "Completed At": completion.completedAt ? formatBaseDateTime(new Date(completion.completedAt)) : null,
+    Source: completion.source || "api"
   };
 }
 

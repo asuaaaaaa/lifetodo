@@ -35,6 +35,9 @@ namespace {
 constexpr uint16_t SCREEN_W = 800;
 constexpr uint16_t SCREEN_H = 480;
 constexpr int32_t RGB_PCLK_HZ = 16000000;
+constexpr uint16_t LVGL_DRAW_BUF_LINES = 40;
+constexpr uint32_t TOUCH_I2C_HZ = 100000;
+constexpr uint32_t TOUCH_SAMPLE_MS = 5;
 constexpr int I2C_SDA = 8;
 constexpr int I2C_SCL = 9;
 constexpr uint8_t CH422G_WR_SET_ADDR = 0x24;
@@ -185,13 +188,6 @@ struct TaskView {
   lv_obj_t *status = nullptr;
 };
 
-struct PendingCompletion {
-  char task_id[40];
-  bool completed;
-  uint8_t attempts;
-  uint32_t next_try_ms;
-};
-
 Task tasks[MAX_TASKS] = {};
 constexpr size_t TASK_COUNT = MAX_TASKS;
 TaskView task_views[TASK_COUNT];
@@ -199,8 +195,6 @@ size_t task_count = 0;
 size_t task_page = 0;
 char completion_keys[MAX_COMPLETIONS][64];
 size_t completion_count = 0;
-PendingCompletion pending_completions[MAX_PENDING_COMPLETIONS];
-size_t pending_completion_count = 0;
 bool task_click_armed = true;
 bool touch_down = false;
 int16_t touch_start_x = 0;
@@ -208,8 +202,29 @@ int16_t touch_start_y = 0;
 int16_t touch_last_x = 0;
 int16_t touch_last_y = 0;
 uint32_t touch_release_started_ms = 0;
+portMUX_TYPE touch_state_mux = portMUX_INITIALIZER_UNLOCKED;
 
-void task_click(lv_event_t *event);
+struct TouchState {
+  bool touched = false;
+  int16_t x = 0;
+  int16_t y = 0;
+  uint32_t updated_ms = 0;
+};
+
+TouchState latest_touch;
+
+struct CompletionSyncRequest {
+  char task_id[40];
+  bool completed;
+};
+
+QueueHandle_t completion_sync_queue = nullptr;
+TaskHandle_t touch_task_handle = nullptr;
+TaskHandle_t completion_sync_task_handle = nullptr;
+volatile bool completion_sync_busy = false;
+volatile uint8_t completion_sync_ui_state = 0;
+
+void toggle_task(size_t task_index);
 void set_brightness_panel_open(bool open);
 void update_brightness_visuals();
 void disable_scroll(lv_obj_t *obj);
@@ -218,11 +233,10 @@ void apply_task_view(size_t index);
 void update_summary();
 void render_tasks();
 void update_task_page();
-void task_grid_gesture(lv_event_t *event);
+bool handle_task_touch_release(int16_t dx, int16_t dy);
 bool sync_from_cloud();
 bool push_completion_to_cloud(const char *task_id, bool completed);
 void queue_completion_sync(const char *task_id, bool completed);
-void process_pending_completion_sync();
 void process_sync_failure_report();
 void update_control_center_status();
 void set_wifi_setup_visible(bool visible, const char *title, const char *body, const char *hint);
@@ -237,6 +251,9 @@ void wifi_reconnect_event(lv_event_t *event);
 void wifi_reprovision_event(lv_event_t *event);
 void show_wifi_status_panel();
 void refresh_wifi_state_labels();
+void touch_sample_task(void *param);
+void completion_sync_task(void *param);
+void handle_completion_sync_ui_state();
 
 void set_cjk_font(lv_obj_t *obj) {
   lv_obj_set_style_text_font(obj, &lifetodo_pingfang_24, 0);
@@ -285,7 +302,7 @@ void ch422g_set_output(uint8_t pin, bool level) {
 
 void init_expander_outputs() {
   LOG_SERIAL.println("CH422G init begin");
-  Wire.begin(I2C_SDA, I2C_SCL, 400000);
+  Wire.begin(I2C_SDA, I2C_SCL, TOUCH_I2C_HZ);
   ch422g_write(CH422G_WR_SET_ADDR, CH422G_IO_OE);
   ch422g_output = 0xff;
   ch422g_write(CH422G_WR_IO_ADDR, ch422g_output);
@@ -558,6 +575,7 @@ bool apply_cloud_document(const String &payload) {
     JsonObject task_fields = item.as<JsonObject>();
     if (task_fields.isNull()) continue;
     if (task_fields["enabled"].is<bool>() && !task_fields["enabled"].as<bool>()) continue;
+    if (!is_due_today(task_fields)) continue;
 
     Task &task = tasks[next_count];
     const char *id = task_fields["id"] | "";
@@ -693,60 +711,17 @@ bool push_completion_to_cloud(const char *task_id, bool completed) {
 }
 
 void queue_completion_sync(const char *task_id, bool completed) {
-  for (size_t i = 0; i < pending_completion_count; i++) {
-    if (strcmp(pending_completions[i].task_id, task_id) == 0) {
-      pending_completions[i].completed = completed;
-      pending_completions[i].attempts = 0;
-      pending_completions[i].next_try_ms = millis() + 700;
-      return;
-    }
-  }
+  if (!completion_sync_queue) return;
 
-  if (pending_completion_count >= MAX_PENDING_COMPLETIONS) {
-    pending_completion_count = MAX_PENDING_COMPLETIONS - 1;
-    for (size_t i = 0; i + 1 < pending_completion_count; i++) {
-      pending_completions[i] = pending_completions[i + 1];
-    }
-  }
+  CompletionSyncRequest request = {};
+  copy_text(request.task_id, sizeof(request.task_id), task_id);
+  request.completed = completed;
 
-  PendingCompletion &item = pending_completions[pending_completion_count++];
-  copy_text(item.task_id, sizeof(item.task_id), task_id);
-  item.completed = completed;
-  item.attempts = 0;
-  item.next_try_ms = millis() + 700;
-}
-
-void remove_pending_completion(size_t index) {
-  if (index >= pending_completion_count) return;
-  for (size_t i = index; i + 1 < pending_completion_count; i++) {
-    pending_completions[i] = pending_completions[i + 1];
-  }
-  pending_completion_count--;
-}
-
-void process_pending_completion_sync() {
-  if (pending_completion_count == 0 || WiFi.status() != WL_CONNECTED) return;
-
-  uint32_t now_ms = millis();
-  PendingCompletion &item = pending_completions[0];
-  if (now_ms < item.next_try_ms) return;
-
-  lv_label_set_text(status_label, "正在同步更改");
-  bool ok = push_completion_to_cloud(item.task_id, item.completed);
-  if (ok) {
-    remove_pending_completion(0);
-    lv_label_set_text(status_label, pending_completion_count == 0 ? "飞书已连接" : "继续同步");
-    return;
-  }
-
-  item.attempts++;
-  if (item.attempts >= 4) {
-    lv_label_set_text(status_label, "同步稍后重试");
-    item.attempts = 0;
-    item.next_try_ms = now_ms + 30000;
-  } else {
-    lv_label_set_text(status_label, "同步重试");
-    item.next_try_ms = now_ms + 3000;
+  if (xQueueSend(completion_sync_queue, &request, 0) != pdTRUE) {
+    CompletionSyncRequest dropped = {};
+    xQueueReceive(completion_sync_queue, &dropped, 0);
+    xQueueSend(completion_sync_queue, &request, 0);
+    LOG_SERIAL.println("Completion sync queue was full; dropped oldest change");
   }
 }
 
@@ -810,10 +785,14 @@ void flush_display(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_
 }
 
 void read_touch(lv_indev_drv_t *, lv_indev_data_t *data) {
-  touch.read();
-  if (touch.isTouched) {
-    int16_t x = touch.points[0].x;
-    int16_t y = touch.points[0].y;
+  TouchState sample;
+  portENTER_CRITICAL(&touch_state_mux);
+  sample = latest_touch;
+  portEXIT_CRITICAL(&touch_state_mux);
+
+  if (sample.touched) {
+    int16_t x = sample.x;
+    int16_t y = sample.y;
     if (!touch_down) {
       touch_start_x = x;
       touch_start_y = y;
@@ -835,19 +814,10 @@ void read_touch(lv_indev_drv_t *, lv_indev_data_t *data) {
       touch_release_started_ms = millis();
       int16_t dx = touch_last_x - touch_start_x;
       int16_t dy = touch_last_y - touch_start_y;
-      if (abs(dy) >= 30 && abs(dy) >= abs(dx) * 2) {
-        if (touch_start_y <= 74) {
-          set_brightness_panel_open(dy > 0);
-        } else if (task_count > TASKS_PER_PAGE && touch_start_y >= 110 && touch_start_y <= 430) {
-          size_t max_page = (task_count - 1) / TASKS_PER_PAGE;
-          if (dy < 0 && task_page < max_page) {
-            task_page++;
-            update_task_page();
-          } else if (dy > 0 && task_page > 0) {
-            task_page--;
-            update_task_page();
-          }
-        }
+      if (abs(dy) >= 30 && abs(dy) >= abs(dx) * 2 && touch_start_y <= 74) {
+        set_brightness_panel_open(dy > 0);
+      } else {
+        handle_task_touch_release(dx, dy);
       }
     }
     if (!task_click_armed && touch_release_started_ms != 0 &&
@@ -855,6 +825,72 @@ void read_touch(lv_indev_drv_t *, lv_indev_data_t *data) {
       task_click_armed = true;
     }
     data->state = LV_INDEV_STATE_REL;
+  }
+}
+
+void touch_sample_task(void *) {
+  for (;;) {
+    touch.read();
+
+    TouchState sample;
+    sample.touched = touch.isTouched;
+    if (touch.isTouched) {
+      sample.x = touch.points[0].x;
+      sample.y = touch.points[0].y;
+    }
+    sample.updated_ms = millis();
+
+    portENTER_CRITICAL(&touch_state_mux);
+    latest_touch = sample;
+    portEXIT_CRITICAL(&touch_state_mux);
+
+    vTaskDelay(pdMS_TO_TICKS(TOUCH_SAMPLE_MS));
+  }
+}
+
+void set_completion_sync_ui_state(uint8_t state) {
+  completion_sync_ui_state = state;
+}
+
+void handle_completion_sync_ui_state() {
+  uint8_t state = completion_sync_ui_state;
+  if (state == 0) return;
+  completion_sync_ui_state = 0;
+
+  if (state == 1) {
+    lv_label_set_text(status_label, "正在同步更改");
+  } else if (state == 2) {
+    lv_label_set_text(status_label, "飞书已连接");
+  } else if (state == 3) {
+    lv_label_set_text(status_label, "同步重试");
+  } else if (state == 4) {
+    lv_label_set_text(status_label, "同步稍后重试");
+  }
+}
+
+void completion_sync_task(void *) {
+  CompletionSyncRequest request;
+  for (;;) {
+    if (xQueueReceive(completion_sync_queue, &request, portMAX_DELAY) != pdTRUE) {
+      continue;
+    }
+
+    completion_sync_busy = true;
+    set_completion_sync_ui_state(1);
+
+    bool ok = false;
+    for (uint8_t attempt = 0; attempt < 4; attempt++) {
+      ok = push_completion_to_cloud(request.task_id, request.completed);
+      if (ok) break;
+
+      set_completion_sync_ui_state(attempt == 3 ? 4 : 3);
+      vTaskDelay(pdMS_TO_TICKS(attempt == 3 ? 30000 : 3000));
+    }
+
+    if (ok) {
+      set_completion_sync_ui_state(2);
+    }
+    completion_sync_busy = false;
   }
 }
 
@@ -893,8 +929,6 @@ void style_panel(lv_obj_t *obj, uint32_t color, bool done) {
   lv_obj_set_style_shadow_color(obj, lv_color_hex(color), 0);
   lv_obj_set_style_shadow_opa(obj, done ? LV_OPA_TRANSP : LV_OPA_10, 0);
 
-  lv_obj_set_style_bg_color(obj, lv_color_hex(done ? 0xe9e4db : 0xf8f4ec), LV_STATE_PRESSED);
-  lv_obj_set_style_shadow_width(obj, 0, LV_STATE_PRESSED);
 }
 
 void apply_task_view(size_t index) {
@@ -953,6 +987,37 @@ void update_task_page() {
   }
 }
 
+bool handle_task_touch_release(int16_t dx, int16_t dy) {
+  if (brightness_panel_open || task_count == 0) return false;
+  if (touch_start_x < 20 || touch_start_x > 780 || touch_start_y < 118 || touch_start_y > 420) return false;
+
+  if (abs(dy) >= 30 && abs(dy) >= abs(dx) * 2) {
+    if (task_count <= TASKS_PER_PAGE) return true;
+    size_t max_page = (task_count - 1) / TASKS_PER_PAGE;
+    if (dy < 0 && task_page < max_page) {
+      task_page++;
+      update_task_page();
+    } else if (dy > 0 && task_page > 0) {
+      task_page--;
+      update_task_page();
+    }
+    return true;
+  }
+
+  if (abs(dx) > 18 || abs(dy) > 18) return true;
+
+  int16_t local_y = touch_start_y - 118;
+  if (local_y < 0) return true;
+  size_t slot = static_cast<size_t>(local_y / 98);
+  if (slot >= TASKS_PER_PAGE || local_y % 98 >= 88) return true;
+
+  size_t task_index = task_page * TASKS_PER_PAGE + slot;
+  if (task_index < task_count) {
+    toggle_task(task_index);
+  }
+  return true;
+}
+
 void render_tasks() {
   lv_obj_clean(task_grid);
   task_page_label = nullptr;
@@ -991,9 +1056,7 @@ void render_tasks() {
     lv_obj_t *btn = lv_obj_create(task_grid);
     lv_obj_set_size(btn, 760, 88);
     lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, slot * 98);
-    lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
     make_static_touch_obj(btn);
-    lv_obj_add_event_cb(btn, task_click, LV_EVENT_CLICKED, reinterpret_cast<void *>(slot));
     task_views[slot].card = btn;
 
     lv_obj_t *accent = lv_obj_create(btn);
@@ -1045,29 +1108,7 @@ void render_tasks() {
   update_task_page();
 }
 
-void task_grid_gesture(lv_event_t *event) {
-  if (lv_event_get_code(event) != LV_EVENT_GESTURE || task_count <= TASKS_PER_PAGE) return;
-  lv_indev_t *indev = static_cast<lv_indev_t *>(lv_event_get_param(event));
-  if (!indev) return;
-
-  int16_t dx = touch_last_x - touch_start_x;
-  int16_t dy = touch_last_y - touch_start_y;
-  if (abs(dy) < 36 || abs(dy) < abs(dx) * 2) return;
-
-  size_t max_page = (task_count - 1) / TASKS_PER_PAGE;
-  lv_dir_t dir = lv_indev_get_gesture_dir(indev);
-  if (dir == LV_DIR_TOP && task_page < max_page) {
-    task_page++;
-    update_task_page();
-  } else if (dir == LV_DIR_BOTTOM && task_page > 0) {
-    task_page--;
-    update_task_page();
-  }
-}
-
-void task_click(lv_event_t *event) {
-  size_t slot = reinterpret_cast<size_t>(lv_event_get_user_data(event));
-  size_t task_index = task_page * TASKS_PER_PAGE + slot;
+void toggle_task(size_t task_index) {
   if (task_index >= task_count) return;
   Task *task = &tasks[task_index];
   if (!task_click_armed) return;
@@ -1090,7 +1131,6 @@ void build_task_grid() {
   lv_obj_set_size(task_grid, 760, 302);
   lv_obj_align(task_grid, LV_ALIGN_TOP_MID, 0, 118);
   make_static_touch_obj(task_grid);
-  lv_obj_add_flag(task_grid, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_set_style_bg_opa(task_grid, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(task_grid, 0, 0);
   lv_obj_set_style_pad_all(task_grid, 0, 0);
@@ -1911,21 +1951,30 @@ void setup() {
 
   LOG_SERIAL.println("Touch init begin");
   touch.begin();
+  Wire.setClock(TOUCH_I2C_HZ);
   // Waveshare's official ESP32-S3-Touch-LCD-4.3 touch config uses no swap
   // and no X/Y mirror. In TAMC_GT911 this corresponds to ROTATION_INVERTED.
   touch.setRotation(ROTATION_INVERTED);
   LOG_SERIAL.println("Touch init ok");
 
+  completion_sync_queue = xQueueCreate(MAX_PENDING_COMPLETIONS, sizeof(CompletionSyncRequest));
+  xTaskCreatePinnedToCore(touch_sample_task, "touch-sample", 4096, nullptr, 3, &touch_task_handle, 1);
+  if (completion_sync_queue) {
+    xTaskCreatePinnedToCore(completion_sync_task, "completion-sync", 8192, nullptr, 1, &completion_sync_task_handle, 0);
+  } else {
+    LOG_SERIAL.println("Completion sync queue allocation failed");
+  }
+
   LOG_SERIAL.println("LVGL init begin");
   lv_init();
-  buf1 = static_cast<lv_color_t *>(ps_malloc(SCREEN_W * 40 * sizeof(lv_color_t)));
-  buf2 = static_cast<lv_color_t *>(ps_malloc(SCREEN_W * 40 * sizeof(lv_color_t)));
+  buf1 = static_cast<lv_color_t *>(ps_malloc(SCREEN_W * LVGL_DRAW_BUF_LINES * sizeof(lv_color_t)));
+  buf2 = static_cast<lv_color_t *>(ps_malloc(SCREEN_W * LVGL_DRAW_BUF_LINES * sizeof(lv_color_t)));
   if (!buf1 || !buf2) {
     LOG_SERIAL.println("LVGL draw buffer allocation failed");
     while (true) delay(1000);
   }
 
-  lv_disp_draw_buf_init(&draw_buf, buf1, buf2, SCREEN_W * 40);
+  lv_disp_draw_buf_init(&draw_buf, buf1, buf2, SCREEN_W * LVGL_DRAW_BUF_LINES);
   lv_disp_drv_init(&disp_drv);
   disp_drv.hor_res = SCREEN_W;
   disp_drv.ver_res = SCREEN_H;
@@ -1955,14 +2004,15 @@ void loop() {
     wifi_connect_pending = false;
     connect_saved_wifi();
   }
-  process_pending_completion_sync();
+  handle_completion_sync_ui_state();
   process_sync_failure_report();
   if (millis() - last_heartbeat_ms > 5000) {
     LOG_SERIAL.printf("Heartbeat heap=%u psram=%u wifi=%d remaining=%u\n",
                       ESP.getFreeHeap(), ESP.getFreePsram(), WiFi.status(), remaining_count());
     last_heartbeat_ms = millis();
   }
-  if (pending_completion_count == 0 && !provisioning_active && WiFi.status() == WL_CONNECTED && millis() >= next_cloud_sync_ms) {
+  bool completion_queue_empty = !completion_sync_queue || uxQueueMessagesWaiting(completion_sync_queue) == 0;
+  if (!completion_sync_busy && completion_queue_empty && !provisioning_active && WiFi.status() == WL_CONNECTED && millis() >= next_cloud_sync_ms) {
     last_cloud_sync_ms = millis();
     sync_from_cloud();
   }

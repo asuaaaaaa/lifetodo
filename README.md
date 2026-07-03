@@ -50,7 +50,7 @@ node scripts/prepare-static-deploy.mjs
 
 原型通过本项目的 Node API 访问飞书多维表格。成功时页面显示 `飞书多维表格已连接`，失败时回落到 `localStorage` 并显示 `本地模式`。
 
-运行前需要用 `lark-cli` 创建/配置 Base，并设置 `LIFETODO_LARK_BASE_TOKEN` 和 `LIFETODO_LARK_TODO_TABLE_ID`。详见 `docs/lark-base-setup.md`。
+运行前需要用 `lark-cli` 创建/配置 Base，并设置 `LIFETODO_LARK_BASE_TOKEN`、`LIFETODO_LARK_TODO_TABLE_ID` 和 `LIFETODO_LARK_COMPLETION_TABLE_ID`。详见 `docs/lark-base-setup.md`。
 
 ## 设计记录
 
