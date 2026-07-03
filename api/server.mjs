@@ -1,15 +1,19 @@
 import { createServer as createHttpServer } from "node:http";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
+import { execFile as nodeExecFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize, resolve } from "node:path";
+import { promisify } from "node:util";
 
 import { defaultSeed } from "./default-seed.mjs";
 import { createLarkBaseStore } from "./lark-base-store.mjs";
 import { normalizeState, setCompletion, upsertDevice } from "./state-utils.mjs";
 
 const defaultHomeId = process.env.LIFETODO_HOME_ID || "demo-home";
+const defaultAlertChatId = "oc_e0fade30cf1d453b162f7a8748d3bab9";
 const staticRoot = resolve("apps/pwa-prototype");
+const execFile = promisify(nodeExecFile);
 
 export function createApiHandler({ store, seed = defaultSeed, now = () => new Date(), notifySyncFailure = sendLarkAlert } = {}) {
   return async function handle(request) {
@@ -87,6 +91,23 @@ export function createApiHandler({ store, seed = defaultSeed, now = () => new Da
 }
 
 async function sendLarkAlert(text) {
+  const chatId = process.env.LIFETODO_LARK_ALERT_CHAT_ID || defaultAlertChatId;
+  if (chatId) {
+    await execFile("lark-cli", [
+      "im",
+      "+messages-send",
+      "--chat-id",
+      chatId,
+      "--text",
+      text,
+      "--as",
+      process.env.LIFETODO_LARK_ALERT_AS || "user",
+      "--format",
+      "json"
+    ]);
+    return true;
+  }
+
   const webhook = process.env.LIFETODO_LARK_ALERT_WEBHOOK;
   if (!webhook) return false;
   await postJson(webhook, {

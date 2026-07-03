@@ -90,7 +90,10 @@ PORT=8787
 LIFETODO_HOME_ID=demo-home
 LIFETODO_LARK_BASE_TOKEN=L6kdbumDKa8QFosicOIcItBjncb
 LIFETODO_LARK_TODO_TABLE_ID=tblrbHrBuoijFiXK
-# 可选：飞书群机器人 webhook，用于 ESP 连续同步失败时通知
+# ESP 连续同步失败时通知的飞书群，默认是「龙虾组织」
+LIFETODO_LARK_ALERT_CHAT_ID=oc_e0fade30cf1d453b162f7a8748d3bab9
+LIFETODO_LARK_ALERT_AS=user
+# 可选：如果不用 lark-cli 发群消息，也可以改用飞书群机器人 webhook
 LIFETODO_LARK_ALERT_WEBHOOK=
 EOF
 ```
