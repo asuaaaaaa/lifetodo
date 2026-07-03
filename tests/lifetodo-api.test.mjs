@@ -53,3 +53,33 @@ test("POST /api/completions toggles a completion and persists the full state", a
   assert.equal(saved.state.completions["litter_2026-07-02"].completedAt, "2026-07-02T08:00:00.000Z");
   assert.equal(body.state.completions["litter_2026-07-02"].source, "device-esp32");
 });
+
+test("POST /api/devices/sync-failure sends a notification payload", async () => {
+  let notification;
+  const handler = createApiHandler({
+    store: {
+      readState: async () => ({ members: [], tasks: [], devices: [], completions: {} }),
+      writeState: async () => {}
+    },
+    seed: { members: [], tasks: [], devices: [], completions: {} },
+    now: () => new Date("2026-07-03T04:00:00.000Z"),
+    notifySyncFailure: async (text, body) => {
+      notification = { text, body };
+      return true;
+    }
+  });
+
+  const response = await handler(
+    new Request("http://localhost/api/devices/sync-failure?home=demo-home", {
+      method: "POST",
+      body: JSON.stringify({ deviceId: "entry", failures: 3, error: "connection refused" })
+    })
+  );
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(body.notified, true);
+  assert.match(notification.text, /LifeTodo 设备同步失败/);
+  assert.match(notification.text, /entry/);
+  assert.equal(notification.body.error, "connection refused");
+});

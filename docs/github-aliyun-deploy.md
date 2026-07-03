@@ -90,6 +90,8 @@ PORT=8787
 LIFETODO_HOME_ID=demo-home
 LIFETODO_LARK_BASE_TOKEN=L6kdbumDKa8QFosicOIcItBjncb
 LIFETODO_LARK_TODO_TABLE_ID=tblrbHrBuoijFiXK
+# 可选：飞书群机器人 webhook，用于 ESP 连续同步失败时通知
+LIFETODO_LARK_ALERT_WEBHOOK=
 EOF
 ```
 

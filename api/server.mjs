@@ -1,4 +1,6 @@
 import { createServer as createHttpServer } from "node:http";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize, resolve } from "node:path";
 
@@ -9,7 +11,7 @@ import { normalizeState, setCompletion, upsertDevice } from "./state-utils.mjs";
 const defaultHomeId = process.env.LIFETODO_HOME_ID || "demo-home";
 const staticRoot = resolve("apps/pwa-prototype");
 
-export function createApiHandler({ store, seed = defaultSeed, now = () => new Date() }) {
+export function createApiHandler({ store, seed = defaultSeed, now = () => new Date(), notifySyncFailure = sendLarkAlert } = {}) {
   return async function handle(request) {
     const url = new URL(request.url);
     const homeId = url.searchParams.get("home") || defaultHomeId;
@@ -60,11 +62,72 @@ export function createApiHandler({ store, seed = defaultSeed, now = () => new Da
         return jsonResponse({ homeId, state });
       }
 
+      if (url.pathname === "/api/devices/sync-failure" && request.method === "POST") {
+        const body = await request.json();
+        if (!body.deviceId) {
+          return jsonResponse({ error: "deviceId is required" }, 400);
+        }
+        const text = [
+          "LifeTodo 设备同步失败",
+          `设备：${body.deviceId}`,
+          `家庭：${homeId}`,
+          `连续失败：${body.failures || 1} 次`,
+          `错误：${body.error || "unknown"}`,
+          `时间：${now().toISOString()}`
+        ].join("\n");
+        const notified = await notifySyncFailure(text, body);
+        return jsonResponse({ ok: true, notified });
+      }
+
       return jsonResponse({ error: "Not found" }, 404);
     } catch (error) {
       return jsonResponse({ error: error.message || "Internal server error" }, 500);
     }
   };
+}
+
+async function sendLarkAlert(text) {
+  const webhook = process.env.LIFETODO_LARK_ALERT_WEBHOOK;
+  if (!webhook) return false;
+  await postJson(webhook, {
+    msg_type: "text",
+    content: { text }
+  });
+  return true;
+}
+
+async function postJson(url, body) {
+  const endpoint = new URL(url);
+  const payload = Buffer.from(JSON.stringify(body));
+  const requestImpl = endpoint.protocol === "https:" ? httpsRequest : httpRequest;
+  await new Promise((resolvePromise, reject) => {
+    const request = requestImpl(
+      {
+        method: "POST",
+        hostname: endpoint.hostname,
+        port: endpoint.port || (endpoint.protocol === "https:" ? 443 : 80),
+        path: `${endpoint.pathname}${endpoint.search}`,
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": payload.length
+        },
+        timeout: 8000
+      },
+      (response) => {
+        response.resume();
+        response.on("end", () => {
+          if (response.statusCode >= 200 && response.statusCode < 300) {
+            resolvePromise();
+          } else {
+            reject(new Error(`Lark alert webhook returned ${response.statusCode}`));
+          }
+        });
+      }
+    );
+    request.on("timeout", () => request.destroy(new Error("Lark alert webhook timed out")));
+    request.on("error", reject);
+    request.end(payload);
+  });
 }
 
 export function createLifeTodoServer({ store = createLarkBaseStore(), seed = defaultSeed, now } = {}) {

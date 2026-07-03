@@ -44,13 +44,18 @@ constexpr uint8_t EXIO_TP_RST = 1;
 constexpr uint8_t EXIO_LCD_BL = 2;
 constexpr uint8_t EXIO_LCD_RST = 3;
 constexpr uint32_t TASK_CLICK_REARM_RELEASE_MS = 220;
-constexpr uint32_t CLOUD_SYNC_INTERVAL_MS = 60000;
+constexpr uint32_t CLOUD_SYNC_INTERVAL_MS = 300000;
+constexpr uint32_t CLOUD_SYNC_RETRY_BASE_MS = 15000;
+constexpr uint32_t CLOUD_SYNC_RETRY_MAX_MS = 120000;
+constexpr uint32_t SYNC_FAILURE_REPORT_RETRY_MS = 60000;
 constexpr uint32_t WIFI_CONNECT_TIMEOUT_MS = 12000;
 constexpr uint32_t CLOUD_SYNC_RETRY_DELAY_MS = 1200;
 constexpr uint32_t TIME_SYNC_TIMEOUT_MS = 9000;
 constexpr uint16_t DNS_PORT = 53;
 constexpr uint8_t CLOUD_SYNC_ATTEMPTS = 3;
+constexpr uint8_t SYNC_FAILURE_NOTIFY_THRESHOLD = 3;
 constexpr size_t MAX_TASKS = 12;
+constexpr size_t TASKS_PER_PAGE = 3;
 constexpr size_t MAX_COMPLETIONS = 40;
 constexpr size_t MAX_PENDING_COMPLETIONS = 8;
 uint8_t ch422g_output = 0xff;
@@ -134,9 +139,12 @@ lv_obj_t *wifi_reprovision_btn;
 lv_obj_t *empty_state_panel;
 lv_obj_t *empty_state_title;
 lv_obj_t *empty_state_body;
+lv_obj_t *task_page_label;
 uint32_t last_heartbeat_ms = 0;
 uint32_t last_touch_log_ms = 0;
 uint32_t last_cloud_sync_ms = 0;
+uint32_t next_cloud_sync_ms = 0;
+uint32_t next_sync_failure_report_ms = 0;
 uint32_t wifi_connect_started_ms = 0;
 int last_wifi_status_code = -1;
 bool brightness_panel_open = false;
@@ -144,6 +152,9 @@ bool provisioning_active = false;
 bool wifi_connect_pending = false;
 uint8_t brightness_percent = 100;
 bool cloud_ready = false;
+uint8_t cloud_sync_failure_streak = 0;
+bool sync_failure_report_pending = false;
+char last_sync_error[64] = "";
 char today_key[11] = "2026-07-01";
 String pending_wifi_ssid;
 String pending_wifi_password;
@@ -181,21 +192,21 @@ struct PendingCompletion {
   uint32_t next_try_ms;
 };
 
-Task tasks[MAX_TASKS] = {
-    {"litter", "妈妈", "铲猫砂盆", "每 3 天", false, 0xef7f65},
-    {"toilet", "爸爸", "清洁马桶", "每月", false, 0x5d8fb4},
-    {"plants", "小朋友", "给阳台植物浇水", "每 2 天", false, 0x6ba36f},
-    {"sheets", "全家", "换床单", "每周", true, 0xf1c45b},
-};
+Task tasks[MAX_TASKS] = {};
 constexpr size_t TASK_COUNT = MAX_TASKS;
 TaskView task_views[TASK_COUNT];
-size_t task_count = 4;
+size_t task_count = 0;
+size_t task_page = 0;
 char completion_keys[MAX_COMPLETIONS][64];
 size_t completion_count = 0;
 PendingCompletion pending_completions[MAX_PENDING_COMPLETIONS];
 size_t pending_completion_count = 0;
 bool task_click_armed = true;
 bool touch_down = false;
+int16_t touch_start_x = 0;
+int16_t touch_start_y = 0;
+int16_t touch_last_x = 0;
+int16_t touch_last_y = 0;
 uint32_t touch_release_started_ms = 0;
 
 void task_click(lv_event_t *event);
@@ -206,10 +217,14 @@ void make_static_touch_obj(lv_obj_t *obj);
 void apply_task_view(size_t index);
 void update_summary();
 void render_tasks();
+void update_task_page();
+void task_grid_gesture(lv_event_t *event);
 bool sync_from_cloud();
 bool push_completion_to_cloud(const char *task_id, bool completed);
 void queue_completion_sync(const char *task_id, bool completed);
 void process_pending_completion_sync();
+void process_sync_failure_report();
+void update_control_center_status();
 void set_wifi_setup_visible(bool visible, const char *title, const char *body, const char *hint);
 void start_wifi_provisioning();
 void stop_wifi_provisioning();
@@ -309,6 +324,10 @@ String state_api_url() {
 
 String completions_api_url() {
   return api_url("/api/completions?home=") + LIFETODO_HOME_ID;
+}
+
+String sync_failure_api_url() {
+  return api_url("/api/devices/sync-failure?home=") + LIFETODO_HOME_ID;
 }
 
 bool begin_lifetodo_http(HTTPClient &http, WiFiClient &plain_client, WiFiClientSecure &secure_client, const String &url) {
@@ -490,6 +509,34 @@ void read_completion_keys(JsonObject completions) {
   }
 }
 
+uint32_t sync_retry_delay_ms() {
+  uint32_t delay_ms = CLOUD_SYNC_RETRY_BASE_MS;
+  for (uint8_t i = 1; i < cloud_sync_failure_streak && delay_ms < CLOUD_SYNC_RETRY_MAX_MS; i++) {
+    delay_ms *= 2;
+  }
+  return min(delay_ms, CLOUD_SYNC_RETRY_MAX_MS);
+}
+
+void schedule_next_cloud_sync(bool success) {
+  uint32_t delay_ms = success ? CLOUD_SYNC_INTERVAL_MS : sync_retry_delay_ms();
+  next_cloud_sync_ms = millis() + delay_ms;
+}
+
+void record_sync_failure(const char *error) {
+  copy_text(last_sync_error, sizeof(last_sync_error), error && error[0] ? error : "sync failed");
+  if (cloud_sync_failure_streak < 255) cloud_sync_failure_streak++;
+  if (cloud_sync_failure_streak >= SYNC_FAILURE_NOTIFY_THRESHOLD) {
+    sync_failure_report_pending = true;
+  }
+  schedule_next_cloud_sync(false);
+}
+
+void record_sync_success() {
+  cloud_sync_failure_streak = 0;
+  copy_text(last_sync_error, sizeof(last_sync_error), "");
+  schedule_next_cloud_sync(true);
+}
+
 bool apply_cloud_document(const String &payload) {
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, payload);
@@ -509,18 +556,24 @@ bool apply_cloud_document(const String &payload) {
   for (JsonVariant item : cloud_tasks) {
     if (next_count >= TASK_COUNT) break;
     JsonObject task_fields = item.as<JsonObject>();
-    if (task_fields.isNull() || !is_due_today(task_fields)) continue;
+    if (task_fields.isNull()) continue;
+    if (task_fields["enabled"].is<bool>() && !task_fields["enabled"].as<bool>()) continue;
 
     Task &task = tasks[next_count];
     const char *id = task_fields["id"] | "";
     const char *title = task_fields["title"] | "事项";
-    const char *label = task_fields["label"] | "";
+    const char *label = task_fields["nextDate"] | "";
     const char *assignee_id = task_fields["assigneeId"] | "";
     String done_key = task_completion_key(id);
 
     copy_text(task.id, sizeof(task.id), id);
     copy_text(task.title, sizeof(task.title), title);
-    copy_text(task.label, sizeof(task.label), label);
+    if (label && label[0] != '\0') {
+      String next_label = String("下次 ") + label;
+      copy_text(task.label, sizeof(task.label), next_label.c_str());
+    } else {
+      copy_text(task.label, sizeof(task.label), task_fields["label"] | "");
+    }
     copy_text(task.member, sizeof(task.member), member_name_for(assignee_id, members, "成员"));
     task.color = member_color_for(assignee_id, members, 0xef7f65);
     task.done = completion_key_exists(done_key.c_str());
@@ -528,6 +581,8 @@ bool apply_cloud_document(const String &payload) {
   }
 
   task_count = next_count;
+  size_t max_page = task_count == 0 ? 0 : (task_count - 1) / TASKS_PER_PAGE;
+  if (task_page > max_page) task_page = max_page;
   cloud_ready = true;
   LOG_SERIAL.printf("Cloud sync ok home=%s today=%s tasks=%u completions=%u\n",
                     LIFETODO_HOME_ID, today_key, static_cast<unsigned>(task_count),
@@ -539,7 +594,8 @@ bool sync_from_cloud() {
   if (WiFi.status() != WL_CONNECTED) return false;
   wait_for_time_sync();
 
-  lv_label_set_text(status_label, "正在同步");
+  lv_label_set_text(status_label, cloud_ready ? "飞书已连接" : "正在同步");
+  copy_text(last_sync_error, sizeof(last_sync_error), "");
 
   String url = state_api_url();
   LOG_SERIAL.printf("LifeTodo API GET url=%s\n", url.c_str());
@@ -556,6 +612,7 @@ bool sync_from_cloud() {
     http.collectHeaders(header_keys, 1);
     if (!begin_lifetodo_http(http, plain_client, client, url)) {
       LOG_SERIAL.printf("LifeTodo API HTTP begin failed attempt=%u\n", attempt);
+      copy_text(last_sync_error, sizeof(last_sync_error), "http begin failed");
       lv_label_set_text(status_label, "同步失败");
       delay(CLOUD_SYNC_RETRY_DELAY_MS);
       continue;
@@ -569,7 +626,8 @@ bool sync_from_cloud() {
     if (code != 200) {
       LOG_SERIAL.printf("LifeTodo API GET failed attempt=%u code=%d error=%s payload=%s\n",
                         attempt, code, http.errorToString(code).c_str(), payload.c_str());
-      lv_label_set_text(status_label, "同步重试");
+      copy_text(last_sync_error, sizeof(last_sync_error), http.errorToString(code).c_str());
+      lv_label_set_text(status_label, cloud_ready ? "飞书已连接" : "同步重试");
       delay(CLOUD_SYNC_RETRY_DELAY_MS);
       continue;
     }
@@ -577,17 +635,21 @@ bool sync_from_cloud() {
     update_today_from_http_date(date_header);
     bool ok = apply_cloud_document(payload);
     if (ok) {
+      record_sync_success();
       update_summary();
       render_tasks();
-      lv_label_set_text(status_label, "飞书已连接");
+      lv_label_set_text(status_label, task_count == 0 ? "暂无待办" : "飞书已连接");
       return true;
     }
 
-    lv_label_set_text(status_label, "同步重试");
+    copy_text(last_sync_error, sizeof(last_sync_error), "invalid response");
+    lv_label_set_text(status_label, cloud_ready ? "飞书已连接" : "同步重试");
     delay(CLOUD_SYNC_RETRY_DELAY_MS);
   }
 
-  lv_label_set_text(status_label, "同步失败");
+  record_sync_failure(last_sync_error);
+  lv_label_set_text(status_label, cloud_ready ? "飞书已连接" : "同步失败");
+  update_control_center_status();
   return false;
 }
 
@@ -688,6 +750,58 @@ void process_pending_completion_sync() {
   }
 }
 
+bool report_sync_failure_to_cloud() {
+  if (WiFi.status() != WL_CONNECTED) return false;
+
+  JsonDocument body;
+  body["deviceId"] = LIFETODO_DEVICE_ID;
+  body["failures"] = cloud_sync_failure_streak;
+  body["error"] = last_sync_error[0] ? last_sync_error : "sync failed";
+  body["source"] = "device-esp32";
+
+  String payload;
+  serializeJson(body, payload);
+
+  WiFiClient plain_client;
+  WiFiClientSecure client;
+  HTTPClient http;
+  String url = sync_failure_api_url();
+  LOG_SERIAL.printf("LifeTodo sync failure report url=%s\n", url.c_str());
+  http.setTimeout(12000);
+  http.setReuse(false);
+  http.useHTTP10(true);
+  if (!begin_lifetodo_http(http, plain_client, client, url)) {
+    LOG_SERIAL.println("LifeTodo sync failure report begin failed");
+    return false;
+  }
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Connection", "close");
+  int code = http.POST(payload);
+  String response = http.getString();
+  http.end();
+
+  if (code < 200 || code >= 300) {
+    LOG_SERIAL.printf("LifeTodo sync failure report failed code=%d error=%s payload=%s\n",
+                      code, http.errorToString(code).c_str(), response.c_str());
+    return false;
+  }
+  LOG_SERIAL.println("LifeTodo sync failure reported");
+  return true;
+}
+
+void process_sync_failure_report() {
+  if (!sync_failure_report_pending || WiFi.status() != WL_CONNECTED) return;
+  uint32_t now_ms = millis();
+  if (now_ms < next_sync_failure_report_ms) return;
+
+  if (report_sync_failure_to_cloud()) {
+    sync_failure_report_pending = false;
+    next_sync_failure_report_ms = 0;
+  } else {
+    next_sync_failure_report_ms = now_ms + SYNC_FAILURE_REPORT_RETRY_MS;
+  }
+}
+
 void flush_display(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_p) {
   uint32_t w = area->x2 - area->x1 + 1;
   uint32_t h = area->y2 - area->y1 + 1;
@@ -698,11 +812,19 @@ void flush_display(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_
 void read_touch(lv_indev_drv_t *, lv_indev_data_t *data) {
   touch.read();
   if (touch.isTouched) {
+    int16_t x = touch.points[0].x;
+    int16_t y = touch.points[0].y;
+    if (!touch_down) {
+      touch_start_x = x;
+      touch_start_y = y;
+    }
     touch_down = true;
     touch_release_started_ms = 0;
     data->state = LV_INDEV_STATE_PR;
-    data->point.x = touch.points[0].x;
-    data->point.y = touch.points[0].y;
+    data->point.x = x;
+    data->point.y = y;
+    touch_last_x = x;
+    touch_last_y = y;
     if (millis() - last_touch_log_ms > 250) {
       LOG_SERIAL.printf("Touch x=%d y=%d\n", data->point.x, data->point.y);
       last_touch_log_ms = millis();
@@ -711,6 +833,22 @@ void read_touch(lv_indev_drv_t *, lv_indev_data_t *data) {
     if (touch_down) {
       touch_down = false;
       touch_release_started_ms = millis();
+      int16_t dx = touch_last_x - touch_start_x;
+      int16_t dy = touch_last_y - touch_start_y;
+      if (abs(dy) >= 30 && abs(dy) >= abs(dx) * 2) {
+        if (touch_start_y <= 74) {
+          set_brightness_panel_open(dy > 0);
+        } else if (task_count > TASKS_PER_PAGE && touch_start_y >= 110 && touch_start_y <= 430) {
+          size_t max_page = (task_count - 1) / TASKS_PER_PAGE;
+          if (dy < 0 && task_page < max_page) {
+            task_page++;
+            update_task_page();
+          } else if (dy > 0 && task_page > 0) {
+            task_page--;
+            update_task_page();
+          }
+        }
+      }
     }
     if (!task_click_armed && touch_release_started_ms != 0 &&
         millis() - touch_release_started_ms > TASK_CLICK_REARM_RELEASE_MS) {
@@ -762,10 +900,17 @@ void style_panel(lv_obj_t *obj, uint32_t color, bool done) {
 void apply_task_view(size_t index) {
   if (index >= TASK_COUNT) return;
 
+  size_t start = task_page * TASKS_PER_PAGE;
+  if (index < start || index >= start + TASKS_PER_PAGE) return;
+  size_t slot = index - start;
   Task &item = tasks[index];
-  TaskView &view = task_views[index];
+  TaskView &view = task_views[slot];
   if (!view.card || !view.accent || !view.check || !view.member || !view.title || !view.label || !view.status) return;
 
+  lv_obj_clear_flag(view.card, LV_OBJ_FLAG_HIDDEN);
+  lv_label_set_text(view.member, item.member);
+  lv_label_set_text(view.title, item.title);
+  lv_label_set_text(view.label, item.label);
   style_panel(view.card, item.color, item.done);
   lv_obj_set_style_bg_color(view.accent, lv_color_hex(item.done ? 0xc8c0b4 : item.color), 0);
   lv_obj_set_style_bg_color(view.check, lv_color_hex(item.done ? 0x2f7d4f : 0xf7f1e7), 0);
@@ -778,15 +923,46 @@ void apply_task_view(size_t index) {
   lv_obj_invalidate(view.card);
 }
 
+void update_task_page() {
+  if (task_count == 0) return;
+
+  size_t max_page = (task_count - 1) / TASKS_PER_PAGE;
+  if (task_page > max_page) task_page = max_page;
+  size_t start = task_page * TASKS_PER_PAGE;
+
+  for (size_t slot = 0; slot < TASKS_PER_PAGE; slot++) {
+    size_t task_index = start + slot;
+    if (task_index < task_count) {
+      apply_task_view(task_index);
+    } else if (task_views[slot].card) {
+      lv_obj_add_flag(task_views[slot].card, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
+
+  if (task_page_label) {
+    if (task_count > TASKS_PER_PAGE) {
+      static char page_buffer[24];
+      snprintf(page_buffer, sizeof(page_buffer), "%u / %u",
+               static_cast<unsigned>(task_page + 1),
+               static_cast<unsigned>(max_page + 1));
+      lv_label_set_text(task_page_label, page_buffer);
+      lv_obj_clear_flag(task_page_label, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_add_flag(task_page_label, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
+}
+
 void render_tasks() {
   lv_obj_clean(task_grid);
+  task_page_label = nullptr;
   for (size_t i = 0; i < TASK_COUNT; i++) {
     task_views[i] = TaskView();
   }
 
   if (task_count == 0) {
     lv_obj_t *panel = lv_obj_create(task_grid);
-    lv_obj_set_size(panel, 744, 236);
+    lv_obj_set_size(panel, 760, 236);
     make_static_touch_obj(panel);
     lv_obj_set_style_radius(panel, 12, 0);
     lv_obj_set_style_bg_color(panel, lv_color_hex(0xffffff), 0);
@@ -811,14 +987,14 @@ void render_tasks() {
     return;
   }
 
-  for (size_t i = 0; i < task_count; i++) {
-    Task &item = tasks[i];
+  for (size_t slot = 0; slot < TASKS_PER_PAGE; slot++) {
     lv_obj_t *btn = lv_obj_create(task_grid);
-    lv_obj_set_size(btn, 744, 86);
+    lv_obj_set_size(btn, 760, 88);
+    lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, slot * 98);
     lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
     make_static_touch_obj(btn);
-    lv_obj_add_event_cb(btn, task_click, LV_EVENT_CLICKED, &item);
-    task_views[i].card = btn;
+    lv_obj_add_event_cb(btn, task_click, LV_EVENT_CLICKED, reinterpret_cast<void *>(slot));
+    task_views[slot].card = btn;
 
     lv_obj_t *accent = lv_obj_create(btn);
     lv_obj_set_size(accent, 7, 86);
@@ -826,7 +1002,7 @@ void render_tasks() {
     make_static_touch_obj(accent);
     lv_obj_set_style_radius(accent, 0, 0);
     lv_obj_set_style_border_width(accent, 0, 0);
-    task_views[i].accent = accent;
+    task_views[slot].accent = accent;
 
     lv_obj_t *check = lv_obj_create(btn);
     lv_obj_set_size(check, 42, 42);
@@ -834,42 +1010,66 @@ void render_tasks() {
     make_static_touch_obj(check);
     lv_obj_set_style_radius(check, 21, 0);
     lv_obj_set_style_border_width(check, 2, 0);
-    task_views[i].check = check;
+    task_views[slot].check = check;
 
     lv_obj_t *done = lv_label_create(check);
     lv_obj_set_style_text_font(done, &lv_font_montserrat_24, 0);
     lv_obj_center(done);
-    task_views[i].status = done;
+    task_views[slot].status = done;
 
     lv_obj_t *member = lv_label_create(btn);
-    lv_label_set_text(member, item.member);
     lv_obj_set_width(member, 110);
     set_cjk_font(member);
     lv_obj_align(member, LV_ALIGN_TOP_RIGHT, -22, 15);
-    task_views[i].member = member;
+    task_views[slot].member = member;
 
     lv_obj_t *title = lv_label_create(btn);
-    lv_label_set_text(title, item.title);
     lv_obj_set_width(title, 470);
     set_cjk_title_font(title);
     lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 82, 12);
-    task_views[i].title = title;
+    task_views[slot].title = title;
 
     lv_obj_t *label = lv_label_create(btn);
-    lv_label_set_text(label, item.label);
     lv_obj_set_width(label, 470);
     set_cjk_font(label);
     lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
     lv_obj_align(label, LV_ALIGN_TOP_LEFT, 82, 48);
-    task_views[i].label = label;
+    task_views[slot].label = label;
+  }
 
-    apply_task_view(i);
+  task_page_label = lv_label_create(task_grid);
+  lv_obj_set_style_text_font(task_page_label, &lv_font_montserrat_18, 0);
+  lv_obj_set_style_text_color(task_page_label, lv_color_hex(0x9a9184), 0);
+  lv_obj_align(task_page_label, LV_ALIGN_BOTTOM_RIGHT, -8, 0);
+  update_task_page();
+}
+
+void task_grid_gesture(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_GESTURE || task_count <= TASKS_PER_PAGE) return;
+  lv_indev_t *indev = static_cast<lv_indev_t *>(lv_event_get_param(event));
+  if (!indev) return;
+
+  int16_t dx = touch_last_x - touch_start_x;
+  int16_t dy = touch_last_y - touch_start_y;
+  if (abs(dy) < 36 || abs(dy) < abs(dx) * 2) return;
+
+  size_t max_page = (task_count - 1) / TASKS_PER_PAGE;
+  lv_dir_t dir = lv_indev_get_gesture_dir(indev);
+  if (dir == LV_DIR_TOP && task_page < max_page) {
+    task_page++;
+    update_task_page();
+  } else if (dir == LV_DIR_BOTTOM && task_page > 0) {
+    task_page--;
+    update_task_page();
   }
 }
 
 void task_click(lv_event_t *event) {
-  Task *task = static_cast<Task *>(lv_event_get_user_data(event));
+  size_t slot = reinterpret_cast<size_t>(lv_event_get_user_data(event));
+  size_t task_index = task_page * TASKS_PER_PAGE + slot;
+  if (task_index >= task_count) return;
+  Task *task = &tasks[task_index];
   if (!task_click_armed) return;
 
   task->done = !task->done;
@@ -879,12 +1079,7 @@ void task_click(lv_event_t *event) {
   LOG_SERIAL.printf("Task toggled id=%s done=%s\n", task->id, task->done ? "true" : "false");
   update_summary();
 
-  for (size_t i = 0; i < task_count; i++) {
-    if (&tasks[i] == task) {
-      apply_task_view(i);
-      break;
-    }
-  }
+  apply_task_view(task_index);
 
   lv_label_set_text(status_label, "待同步");
   queue_completion_sync(task->id, task->done);
@@ -894,17 +1089,11 @@ void build_task_grid() {
   task_grid = lv_obj_create(root);
   lv_obj_set_size(task_grid, 760, 302);
   lv_obj_align(task_grid, LV_ALIGN_TOP_MID, 0, 118);
-  lv_obj_add_flag(task_grid, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_set_scroll_dir(task_grid, LV_DIR_VER);
-  lv_obj_set_scrollbar_mode(task_grid, LV_SCROLLBAR_MODE_AUTO);
-  lv_obj_clear_flag(task_grid, LV_OBJ_FLAG_SCROLL_CHAIN | LV_OBJ_FLAG_SCROLL_MOMENTUM);
+  make_static_touch_obj(task_grid);
+  lv_obj_add_flag(task_grid, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_set_style_bg_opa(task_grid, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(task_grid, 0, 0);
-  lv_obj_set_flex_flow(task_grid, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_flex_align(task_grid, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
   lv_obj_set_style_pad_all(task_grid, 0, 0);
-  lv_obj_set_style_pad_row(task_grid, 10, 0);
-  lv_obj_set_style_pad_column(task_grid, 0, 0);
 
   render_tasks();
 }
@@ -955,17 +1144,7 @@ void set_brightness_panel_open(bool open) {
   }
   lv_obj_move_foreground(brightness_overlay);
   lv_obj_move_foreground(brightness_panel);
-
-  lv_anim_t anim;
-  lv_anim_init(&anim);
-  lv_anim_set_var(&anim, brightness_panel);
-  lv_anim_set_values(&anim, lv_obj_get_y(brightness_panel), open ? 22 : -456);
-  lv_anim_set_time(&anim, 180);
-  lv_anim_set_path_cb(&anim, lv_anim_path_ease_out);
-  lv_anim_set_exec_cb(&anim, [](void *obj, int32_t value) {
-    lv_obj_set_y(static_cast<lv_obj_t *>(obj), value);
-  });
-  lv_anim_start(&anim);
+  lv_obj_set_y(brightness_panel, open ? 22 : -456);
 }
 
 void control_wifi_event(lv_event_t *) {
@@ -994,6 +1173,10 @@ void brightness_gesture_event(lv_event_t *event) {
   if (!indev) return;
 
   lv_dir_t dir = lv_indev_get_gesture_dir(indev);
+  int16_t dx = touch_last_x - touch_start_x;
+  int16_t dy = touch_last_y - touch_start_y;
+  if (abs(dy) < 42 || abs(dy) < abs(dx) * 2) return;
+
   if (dir == LV_DIR_BOTTOM) {
     set_brightness_panel_open(true);
   } else if (dir == LV_DIR_TOP) {
@@ -1027,7 +1210,6 @@ void build_brightness_controls() {
   lv_obj_set_style_border_opa(brightness_panel, LV_OPA_20, 0);
   lv_obj_set_style_border_width(brightness_panel, 1, 0);
   lv_obj_set_style_pad_all(brightness_panel, 20, 0);
-  lv_obj_add_event_cb(brightness_panel, brightness_gesture_event, LV_EVENT_GESTURE, nullptr);
   lv_obj_add_event_cb(brightness_panel, brightness_gesture_event, LV_EVENT_CLICKED, nullptr);
 
   lv_obj_t *wifi_card = lv_obj_create(brightness_panel);
@@ -1168,7 +1350,6 @@ void build_brightness_controls() {
   lv_obj_set_style_bg_opa(brightness_gesture_zone, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(brightness_gesture_zone, 0, 0);
   lv_obj_set_style_pad_all(brightness_gesture_zone, 0, 0);
-  lv_obj_add_event_cb(brightness_gesture_zone, brightness_gesture_event, LV_EVENT_GESTURE, nullptr);
   lv_obj_add_event_cb(brightness_gesture_zone, brightness_gesture_event, LV_EVENT_CLICKED, nullptr);
 
   lv_obj_t *handle = lv_obj_create(brightness_gesture_zone);
@@ -1775,12 +1956,13 @@ void loop() {
     connect_saved_wifi();
   }
   process_pending_completion_sync();
+  process_sync_failure_report();
   if (millis() - last_heartbeat_ms > 5000) {
     LOG_SERIAL.printf("Heartbeat heap=%u psram=%u wifi=%d remaining=%u\n",
                       ESP.getFreeHeap(), ESP.getFreePsram(), WiFi.status(), remaining_count());
     last_heartbeat_ms = millis();
   }
-  if (pending_completion_count == 0 && !provisioning_active && WiFi.status() == WL_CONNECTED && millis() - last_cloud_sync_ms > CLOUD_SYNC_INTERVAL_MS) {
+  if (pending_completion_count == 0 && !provisioning_active && WiFi.status() == WL_CONNECTED && millis() >= next_cloud_sync_ms) {
     last_cloud_sync_ms = millis();
     sync_from_cloud();
   }
