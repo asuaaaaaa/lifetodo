@@ -104,17 +104,24 @@ function bindEvents() {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const recurrence = parseRecurrence(form);
+    const { assigneeIds, assigneeId } = parseAssignee(form);
     await store.addTask({
       id: crypto.randomUUID(),
       title: String(form.get("title")).trim(),
-      assigneeId: form.get("assigneeId"),
+      assigneeId,
+      assigneeIds,
       recurrence: recurrence.value,
       label: recurrence.label,
       enabled: true
     });
     event.currentTarget.reset();
     updateRecurrenceFields();
+    updateAssigneeModeFields();
     render();
+  });
+
+  document.querySelectorAll('input[name="assigneeMode"]').forEach((el) => {
+    el.addEventListener("change", updateAssigneeModeFields);
   });
 
   document.querySelector("#memberForm")?.addEventListener("submit", async (event) => {
@@ -161,6 +168,31 @@ function parseRecurrence(form) {
   }
   const every = clamp(Number(form.get("intervalEvery")), 1, 60);
   return { label: `每 ${every} 天`, value: { type: "intervalDays", every, anchorDate: todayKey } };
+}
+
+function parseAssignee(form) {
+  const mode = form.get("assigneeMode");
+  if (mode === "cycle") {
+    const ids = form.getAll("cycleMemberId").map(String).filter(Boolean);
+    if (ids.length > 0) {
+      return { assigneeIds: ids, assigneeId: ids[0] };
+    }
+  }
+  const id = String(form.get("assigneeId") || "");
+  return { assigneeIds: id ? [id] : [], assigneeId: id };
+}
+
+function updateAssigneeModeFields() {
+  const mode = document.querySelector('input[name="assigneeMode"]:checked')?.value || "single";
+  const singleField = document.querySelector("#singleAssigneeField");
+  const cycleField = document.querySelector("#cycleAssigneeField");
+  if (mode === "cycle") {
+    singleField?.classList.add("hidden");
+    cycleField?.classList.remove("hidden");
+  } else {
+    singleField?.classList.remove("hidden");
+    cycleField?.classList.add("hidden");
+  }
 }
 
 function updateRecurrenceFields() {
@@ -241,10 +273,23 @@ function renderSyncMode() {
 
 function renderAssigneeOptions() {
   const select = document.querySelector("#assigneeSelect");
-  if (!select) return;
-  select.innerHTML = state()
-    .members.map((member) => `<option value="${member.id}">${escapeHtml(member.name)}</option>`)
-    .join("");
+  const cycleContainer = document.querySelector("#cycleMembersContainer");
+  const members = state().members;
+  if (select) {
+    select.innerHTML = members
+      .map((member) => `<option value="${member.id}">${escapeHtml(member.name)}</option>`)
+      .join("");
+  }
+  if (cycleContainer) {
+    cycleContainer.innerHTML = members
+      .map((member, idx) => `
+        <label class="checkbox-label">
+          <input type="checkbox" name="cycleMemberId" value="${member.id}" ${idx <= 1 ? "checked" : ""}>
+          <span class="dot" style="--accent:${member.color}"></span>${escapeHtml(member.name)}
+        </label>
+      `)
+      .join("");
+  }
 }
 
 function renderSummary() {
@@ -286,10 +331,28 @@ function memberSection(member, tasks) {
 
 function taskButton(task) {
   const done = Boolean(state().completions[completionKey(task.id)]);
+  const isStrong = !done && (task.missedCount >= 2 || task.overdueType === "today_strong");
+  const isFront = !done && task.overdueType === "pending_front";
+  
+  let badges = "";
+  if (isStrong) {
+    badges += `<span class="strong-badge">🔥 连漏 ${task.missedCount || 1} 次 · 强提醒</span>`;
+  }
+  if (isFront) {
+    badges += `<span class="pending-front-badge">⏳ 上次未做 (${task.lastReminderDate || "前次"}) · 前置</span>`;
+  }
+  if (task.cycleInfo?.enabled) {
+    const cycleNames = task.cycleInfo.options.map((id) => state().members.find((m) => m.id === id)?.name || id).join("⇄");
+    badges += `<span class="cycle-badge">⇄ ${cycleNames}</span>`;
+  }
+
   return `
-    <button class="task-row ${done ? "done" : ""}" type="button" data-completion-task-id="${task.id}" data-completed="${done}">
+    <button class="task-row ${done ? "done" : ""} ${isStrong ? "strong-alert" : ""} ${isFront ? "overdue-front" : ""}" type="button" data-completion-task-id="${task.id}" data-completed="${done}">
       <span class="check">✓</span>
-      <span><strong class="task-title">${escapeHtml(task.title)}</strong><br><span class="task-meta">${escapeHtml(task.label)}</span></span>
+      <span>
+        <strong class="task-title">${escapeHtml(task.title)}</strong>${badges}<br>
+        <span class="task-meta">${escapeHtml(task.label)}</span>
+      </span>
       <span class="task-meta">${done ? "恢复" : "完成"}</span>
     </button>
   `;
@@ -301,13 +364,18 @@ function renderTasks() {
   container.innerHTML = state()
     .tasks.map((task) => {
       const member = state().members.find((item) => item.id === task.assigneeId) || state().members[0];
+      let metaText = `${escapeHtml(member?.name || "未分配")} · ${escapeHtml(task.label)}`;
+      if (task.cycleInfo?.enabled) {
+        const cycleNames = task.cycleInfo.options.map((id) => state().members.find((m) => m.id === id)?.name || id).join(" -> ");
+        metaText = `[选项循环轮转] ${cycleNames} (本次负责: ${escapeHtml(member?.name || task.assigneeId)}) · ${escapeHtml(task.label)}`;
+      }
       return `
         <section class="member-section">
           <div class="member-head">
             <div class="member-name"><span class="dot" style="--accent:${member?.color || "#ef7f65"}"></span>${escapeHtml(task.title)}</div>
             <span class="task-meta">${task.enabled === false ? "已停用" : "启用中"}</span>
           </div>
-          <span class="task-meta">${escapeHtml(member?.name || "未分配")} · ${escapeHtml(task.label)}</span>
+          <span class="task-meta">${metaText}</span>
           <div class="row-actions">
             <button class="secondary-button" type="button" data-task-action="toggle-enabled" data-task-id="${task.id}">
               ${task.enabled === false ? "启用" : "停用"}
@@ -451,7 +519,12 @@ function devicePerson(member, tasks) {
 
 function deviceTask(task) {
   const done = Boolean(state().completions[completionKey(task.id)]);
-  return `<button class="device-task ${done ? "done" : ""}" type="button" data-completion-task-id="${task.id}" data-completed="${done}"><span>${escapeHtml(task.title)}</span><span>${done ? "恢复" : "完成"}</span></button>`;
+  const isStrong = !done && (task.missedCount >= 2 || task.overdueType === "today_strong");
+  const isFront = !done && task.overdueType === "pending_front";
+  let tag = "";
+  if (isStrong) tag = ` <span class="strong-badge">🚨连漏${task.missedCount || 1}次</span>`;
+  else if (isFront) tag = ` <span class="pending-front-badge">⏳前置</span>`;
+  return `<button class="device-task ${done ? "done" : ""} ${isStrong ? "strong-alert" : ""}" type="button" data-completion-task-id="${task.id}" data-completed="${done}"><span>${escapeHtml(task.title)}${tag}</span><span>${done ? "恢复" : "完成"}</span></button>`;
 }
 
 function bindTaskButtons() {

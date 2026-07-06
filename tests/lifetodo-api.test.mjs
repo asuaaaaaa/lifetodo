@@ -83,3 +83,103 @@ test("POST /api/devices/sync-failure sends a notification payload", async () => 
   assert.match(notification.text, /entry/);
   assert.equal(notification.body.error, "connection refused");
 });
+
+test("GET /api/state returns enriched task cycling assignee and overdue fields", async () => {
+  const handler = createApiHandler({
+    store: {
+      readState: async (homeId) => ({
+        members: [
+          { id: "m1", name: "猪猪", color: "#ef7f65" },
+          { id: "m2", name: "熊熊", color: "#336699" }
+        ],
+        tasks: [
+          {
+            id: "task_cycle",
+            title: "倒垃圾",
+            assigneeIds: ["m1", "m2"],
+            recurrence: { type: "intervalDays", every: 1, anchorDate: "2026-07-01" },
+            enabled: true
+          }
+        ],
+        devices: [],
+        completions: {
+          "task_cycle_2026-07-01": { taskId: "task_cycle", date: "2026-07-01", completed: true }
+        },
+        homeId
+      }),
+      writeState: async () => {}
+    },
+    seed: { members: [], tasks: [], devices: [], completions: {} },
+    now: () => new Date("2026-07-02T10:00:00.000Z")
+  });
+
+  const response = await handler(new Request("http://localhost/api/state?home=demo-home"));
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  const task = body.state.tasks[0];
+  assert.equal(task.cycleInfo.enabled, true);
+  assert.equal(task.cycleInfo.currentIndex, 1);
+  assert.equal(task.assigneeId, "m2"); // Cycled to member 2
+});
+
+test("GET /api/state sorts tasks putting pending_front and today_strong before regular due tasks", async () => {
+  const handler = createApiHandler({
+    store: {
+      readState: async (homeId) => ({
+        members: [{ id: "m1", name: "猪猪" }],
+        tasks: [
+          { id: "normal_due", title: "正常今日", assigneeId: "m1", recurrence: { type: "intervalDays", every: 1, anchorDate: "2026-07-05" }, enabled: true },
+          { id: "front_task", title: "前置任务", assigneeId: "m1", recurrence: { type: "intervalDays", every: 3, anchorDate: "2026-07-01" }, enabled: true }
+        ],
+        devices: [],
+        completions: {},
+        homeId
+      }),
+      writeState: async () => {}
+    },
+    seed: { members: [], tasks: [], devices: [], completions: {} },
+    now: () => new Date("2026-07-05T10:00:00.000Z")
+  });
+
+  const response = await handler(new Request("http://localhost/api/state?home=demo-home"));
+  const body = await response.json();
+
+  assert.equal(body.state.tasks[0].id, "front_task");
+  assert.equal(body.state.tasks[0].overdueType, "pending_front");
+  assert.equal(body.state.tasks[1].id, "normal_due");
+});
+
+test("POST /api/tasks/check-overdue sends strong alert to Lark lobster group when missed count >= 2", async () => {
+  let alertText = "";
+  const handler = createApiHandler({
+    store: {
+      readState: async (homeId) => ({
+        members: [{ id: "m1", name: "猪猪" }],
+        tasks: [
+          { id: "t_overdue", title: "铲猫砂", assigneeId: "m1", recurrence: { type: "intervalDays", every: 1, anchorDate: "2026-07-01" }, enabled: true }
+        ],
+        devices: [],
+        completions: {},
+        homeId
+      }),
+      writeState: async () => {}
+    },
+    seed: { members: [], tasks: [], devices: [], completions: {} },
+    now: () => new Date("2026-07-05T10:00:00.000Z"),
+    notifyAlert: async (text) => {
+      alertText = text;
+      return true;
+    }
+  });
+
+  const response = await handler(new Request("http://localhost/api/tasks/check-overdue?home=demo-home", { method: "POST" }));
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(body.notifiedCount, 1);
+  assert.match(alertText, /飞书龙虾组织强提醒/);
+  assert.match(alertText, /铲猫砂/);
+  assert.match(alertText, /猪猪/);
+});
+

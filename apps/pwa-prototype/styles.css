@@ -506,6 +506,85 @@ input[type="color"] {
   text-decoration: line-through;
 }
 
+.assignee-mode-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.radio-group, .checkbox-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  background: rgba(0,0,0,0.02);
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+}
+
+.radio-label, .checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.strong-badge {
+  display: inline-block;
+  background: #d9381e;
+  color: #fff;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  margin-left: 6px;
+  animation: pulse-alert 1.5s infinite;
+}
+
+.pending-front-badge {
+  display: inline-block;
+  background: #e67e22;
+  color: #fff;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  margin-left: 6px;
+}
+
+.cycle-badge {
+  display: inline-block;
+  background: #2b5c8f;
+  color: #fff;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  margin-left: 6px;
+}
+
+.task-card.strong-alert {
+  border: 1.5px solid #d9381e !important;
+  background: rgba(217, 56, 30, 0.04) !important;
+}
+
+.device-task.strong-alert {
+  color: #d9381e;
+  font-weight: 600;
+}
+
+@keyframes pulse-alert {
+  0% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.85; transform: scale(1.02); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
 @media (max-width: 560px) {
   .app-shell {
     padding: 0;

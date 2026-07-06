@@ -28,6 +28,8 @@ server {
 
   root /var/www/lifetodo/dist/site;
   index index.html;
+  include /etc/nginx/mime.types;
+  default_type application/octet-stream;
 
   location /app/ {
     try_files $uri $uri/ /app/index.html;

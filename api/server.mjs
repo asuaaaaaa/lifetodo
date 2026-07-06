@@ -8,14 +8,15 @@ import { promisify } from "node:util";
 
 import { defaultSeed } from "./default-seed.mjs";
 import { createLarkBaseStore } from "./lark-base-store.mjs";
-import { normalizeState, setCompletion, upsertDevice } from "./state-utils.mjs";
+import { normalizeState, setCompletion, upsertDevice, checkAndNotifyOverdueTasks } from "./state-utils.mjs";
 
 const defaultHomeId = process.env.LIFETODO_HOME_ID || "demo-home";
 const defaultAlertChatId = "oc_e0fade30cf1d453b162f7a8748d3bab9";
 const staticRoot = resolve("apps/pwa-prototype");
 const execFile = promisify(nodeExecFile);
 
-export function createApiHandler({ store, seed = defaultSeed, now = () => new Date(), notifySyncFailure = sendLarkAlert } = {}) {
+export function createApiHandler({ store, seed = defaultSeed, now = () => new Date(), notifySyncFailure = sendLarkAlert, notifyAlert = sendLarkAlert } = {}) {
+  const alertNotifier = notifyAlert || notifySyncFailure;
   return async function handle(request) {
     const url = new URL(request.url);
     const homeId = url.searchParams.get("home") || defaultHomeId;
@@ -27,12 +28,13 @@ export function createApiHandler({ store, seed = defaultSeed, now = () => new Da
     try {
       if (url.pathname === "/api/state" && request.method === "GET") {
         const state = await readOrSeed(store, homeId, seed);
+        await checkAndNotifyOverdueTasks(state, homeId, alertNotifier, now);
         return jsonResponse({ homeId, state });
       }
 
       if (url.pathname === "/api/state" && request.method === "PUT") {
         const body = await request.json();
-        const state = normalizeState(body.state);
+        const state = normalizeState(body.state, now);
         await store.writeState(homeId, state, body.source || "app-h5");
         return jsonResponse({ homeId, state });
       }
@@ -44,8 +46,15 @@ export function createApiHandler({ store, seed = defaultSeed, now = () => new Da
         }
         const state = await readOrSeed(store, homeId, seed);
         setCompletion(state, body.taskId, body.date, body.completed !== false, body.source || "api", now);
+        await checkAndNotifyOverdueTasks(state, homeId, alertNotifier, now);
         await store.writeState(homeId, state, body.source || "api");
         return jsonResponse({ homeId, state });
+      }
+
+      if (url.pathname === "/api/tasks/check-overdue" && (request.method === "POST" || request.method === "GET")) {
+        const state = await readOrSeed(store, homeId, seed);
+        const notifiedCount = await checkAndNotifyOverdueTasks(state, homeId, alertNotifier, now);
+        return jsonResponse({ homeId, notifiedCount, ok: true });
       }
 
       if (url.pathname === "/api/devices/heartbeat" && request.method === "POST") {

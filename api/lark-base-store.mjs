@@ -109,7 +109,7 @@ export function createLarkBaseStore({
       const fallbackState = normalizeState(fallback || {});
       const records = await listTodoRecords();
       const tasks = records.map(recordToTask).filter((task) => task.id);
-      const members = mergeMembers(fallbackState.members, records.map(recordToMember).filter((member) => member.id));
+      const members = mergeMembers(fallbackState.members, recordsToMembers(records));
       const completions = {};
       const completionRecords = await listCompletionRecords();
       const completionSourceRecords = completionRecords.length ? completionRecords : records;
@@ -237,10 +237,13 @@ export function createLarkBaseStore({
 function recordToTask(record) {
   const fields = record.fields || {};
   const recurrenceType = readField(fields, "Recurrence Type") || "intervalDays";
+  const rawAssignee = readField(fields, "Assignee ID");
+  const assigneeIds = typeof rawAssignee === "string" && rawAssignee.includes(",") ? rawAssignee.split(",").map(s => s.trim()).filter(Boolean) : undefined;
   return {
     id: readField(fields, "Task ID"),
     title: readField(fields, "Title") || "事项",
-    assigneeId: readField(fields, "Assignee ID"),
+    assigneeId: rawAssignee,
+    assigneeIds,
     recurrence: recordToRecurrence(fields, recurrenceType),
     label: readField(fields, "Label") || recurrenceLabel(fields, recurrenceType),
     nextDate: readField(fields, "Next Date") || null,
@@ -248,13 +251,25 @@ function recordToTask(record) {
   };
 }
 
-function recordToMember(record) {
-  const fields = record.fields || {};
-  return {
-    id: readField(fields, "Assignee ID"),
-    name: readField(fields, "Assignee Name") || readField(fields, "Assignee ID"),
-    color: readField(fields, "Assignee Color") || "#ef7f65"
-  };
+function recordsToMembers(records) {
+  const list = [];
+  for (const record of records) {
+    const fields = record.fields || {};
+    const idStr = readField(fields, "Assignee ID") || "";
+    const nameStr = readField(fields, "Assignee Name") || idStr;
+    const colorStr = readField(fields, "Assignee Color") || "#ef7f65";
+    if (idStr.includes(",")) {
+      const ids = idStr.split(",").map(s => s.trim());
+      const names = nameStr.split(",").map(s => s.trim().replace(/ *\(轮流\)/g, ""));
+      const colors = colorStr.split(",").map(s => s.trim());
+      for (let i = 0; i < ids.length; i++) {
+        if (ids[i]) list.push({ id: ids[i], name: names[i] || ids[i], color: colors[i] || "#ef7f65" });
+      }
+    } else if (idStr) {
+      list.push({ id: idStr, name: nameStr, color: colorStr });
+    }
+  }
+  return list;
 }
 
 function recordToRecurrence(fields, recurrenceType) {
@@ -303,15 +318,27 @@ function completionToRecord(completionId, completion) {
 }
 
 function taskToRecord(task, state, now) {
-  const member = state.members.find((item) => item.id === task.assigneeId);
+  const isCycling = Array.isArray(task.assigneeIds) && task.assigneeIds.length >= 2;
+  const assigneeIdVal = isCycling ? task.assigneeIds.join(",") : (task.assigneeId || "");
+  let assigneeNameVal = "";
+  let assigneeColorVal = "#ef7f65";
+  if (isCycling) {
+    const names = task.assigneeIds.map((id) => state.members.find((item) => item.id === id)?.name || id).join(",");
+    assigneeNameVal = `${names} (轮流)`;
+    assigneeColorVal = task.assigneeIds.map((id) => state.members.find((item) => item.id === id)?.color || "#ef7f65").join(",");
+  } else {
+    const member = state.members.find((item) => item.id === task.assigneeId);
+    assigneeNameVal = member?.name || task.assigneeId || "";
+    assigneeColorVal = member?.color || "#ef7f65";
+  }
   const completion = latestCompletionForTask(state.completions, task.id);
   const recurrence = task.recurrence || { type: "intervalDays", every: 1, anchorDate: todayKey(now()) };
   return {
     "Task ID": task.id,
     Title: task.title || "事项",
-    "Assignee ID": task.assigneeId || "",
-    "Assignee Name": member?.name || task.assigneeId || "",
-    "Assignee Color": member?.color || "#ef7f65",
+    "Assignee ID": assigneeIdVal,
+    "Assignee Name": assigneeNameVal,
+    "Assignee Color": assigneeColorVal,
     Enabled: task.enabled !== false,
     "Recurrence Type": recurrence.type || "intervalDays",
     "Interval Every": recurrence.type === "intervalDays" ? Number(recurrence.every || 1) : null,

@@ -34,10 +34,12 @@ LV_FONT_DECLARE(lifetodo_pingfang_28);
 namespace {
 constexpr uint16_t SCREEN_W = 800;
 constexpr uint16_t SCREEN_H = 480;
-constexpr int32_t RGB_PCLK_HZ = 16000000;
+constexpr int32_t RGB_PCLK_HZ = 14000000;
 constexpr uint16_t LVGL_DRAW_BUF_LINES = 40;
 constexpr uint32_t TOUCH_I2C_HZ = 100000;
 constexpr uint32_t TOUCH_SAMPLE_MS = 5;
+constexpr uint16_t TOUCH_I2C_TIMEOUT_MS = 50;
+constexpr uint32_t TOUCH_STALE_MS = 80;
 constexpr int I2C_SDA = 8;
 constexpr int I2C_SCL = 9;
 constexpr uint8_t CH422G_WR_SET_ADDR = 0x24;
@@ -176,6 +178,9 @@ struct Task {
   char label[32];
   bool done;
   uint32_t color;
+  bool is_overdue;
+  char overdue_type[24];
+  int missed_count;
 };
 
 struct TaskView {
@@ -463,6 +468,13 @@ bool is_due_today(JsonObject task_fields) {
     return false;
   }
 
+  if (!task_fields["isDueToday"].isNull()) {
+    return task_fields["isDueToday"].as<bool>() ||
+           task_fields["isOverdue"].as<bool>() ||
+           strcmp(task_fields["overdueType"] | "", "pending_front") == 0 ||
+           strcmp(task_fields["overdueType"] | "", "today_strong") == 0;
+  }
+
   JsonObject recurrence = task_fields["recurrence"].as<JsonObject>();
   const char *type = recurrence["type"] | "";
   time_t today = parse_date(today_key);
@@ -582,6 +594,9 @@ bool apply_cloud_document(const String &payload) {
     const char *title = task_fields["title"] | "事项";
     const char *label = task_fields["nextDate"] | "";
     const char *assignee_id = task_fields["assigneeId"] | "";
+    const char *overdue_type = task_fields["overdueType"] | "";
+    bool is_overdue = task_fields["isOverdue"] | false;
+    int missed_count = task_fields["missedCount"] | 0;
     String done_key = task_completion_key(id);
 
     copy_text(task.id, sizeof(task.id), id);
@@ -595,6 +610,9 @@ bool apply_cloud_document(const String &payload) {
     copy_text(task.member, sizeof(task.member), member_name_for(assignee_id, members, "成员"));
     task.color = member_color_for(assignee_id, members, 0xef7f65);
     task.done = completion_key_exists(done_key.c_str());
+    task.is_overdue = is_overdue;
+    copy_text(task.overdue_type, sizeof(task.overdue_type), overdue_type);
+    task.missed_count = missed_count;
     next_count++;
   }
 
@@ -790,6 +808,10 @@ void read_touch(lv_indev_drv_t *, lv_indev_data_t *data) {
   sample = latest_touch;
   portEXIT_CRITICAL(&touch_state_mux);
 
+  if (millis() - sample.updated_ms > TOUCH_STALE_MS) {
+    sample.touched = false;
+  }
+
   if (sample.touched) {
     int16_t x = sample.x;
     int16_t y = sample.y;
@@ -814,7 +836,9 @@ void read_touch(lv_indev_drv_t *, lv_indev_data_t *data) {
       touch_release_started_ms = millis();
       int16_t dx = touch_last_x - touch_start_x;
       int16_t dy = touch_last_y - touch_start_y;
-      if (abs(dy) >= 30 && abs(dy) >= abs(dx) * 2 && touch_start_y <= 74) {
+      if (brightness_panel_open && abs(dy) >= 30 && abs(dy) >= abs(dx) * 2) {
+        set_brightness_panel_open(dy > 0);
+      } else if (abs(dy) >= 30 && abs(dy) >= abs(dx) * 2 && touch_start_y <= 74) {
         set_brightness_panel_open(dy > 0);
       } else {
         handle_task_touch_release(dx, dy);
@@ -837,6 +861,11 @@ void touch_sample_task(void *) {
     if (touch.isTouched) {
       sample.x = touch.points[0].x;
       sample.y = touch.points[0].y;
+      if (sample.x < 0 || sample.x >= SCREEN_W || sample.y < 0 || sample.y >= SCREEN_H) {
+        sample.touched = false;
+        sample.x = 0;
+        sample.y = 0;
+      }
     }
     sample.updated_ms = millis();
 
@@ -925,9 +954,8 @@ void style_panel(lv_obj_t *obj, uint32_t color, bool done) {
   lv_obj_set_style_border_color(obj, border, 0);
   lv_obj_set_style_border_width(obj, 1, 0);
   lv_obj_set_style_pad_all(obj, 0, 0);
-  lv_obj_set_style_shadow_width(obj, done ? 0 : 5, 0);
-  lv_obj_set_style_shadow_color(obj, lv_color_hex(color), 0);
-  lv_obj_set_style_shadow_opa(obj, done ? LV_OPA_TRANSP : LV_OPA_10, 0);
+  lv_obj_set_style_shadow_width(obj, 0, 0);
+  lv_obj_set_style_shadow_opa(obj, LV_OPA_TRANSP, 0);
 
 }
 
@@ -944,14 +972,30 @@ void apply_task_view(size_t index) {
   lv_obj_clear_flag(view.card, LV_OBJ_FLAG_HIDDEN);
   lv_label_set_text(view.member, item.member);
   lv_label_set_text(view.title, item.title);
-  lv_label_set_text(view.label, item.label);
   style_panel(view.card, item.color, item.done);
+
+  if (!item.done && (item.missed_count >= 2 || strcmp(item.overdue_type, "today_strong") == 0)) {
+    char label_buf[64];
+    snprintf(label_buf, sizeof(label_buf), "🔥连漏%d次·强提醒 | %s", item.missed_count > 0 ? item.missed_count : 1, item.label);
+    lv_label_set_text(view.label, label_buf);
+    lv_obj_set_style_border_color(view.card, lv_color_hex(0xd9381e), 0);
+    lv_obj_set_style_border_width(view.card, 2, 0);
+    lv_obj_set_style_text_color(view.label, lv_color_hex(0xd9381e), 0);
+  } else if (!item.done && strcmp(item.overdue_type, "pending_front") == 0) {
+    char label_buf[64];
+    snprintf(label_buf, sizeof(label_buf), "⏳前置待办 | %s", item.label);
+    lv_label_set_text(view.label, label_buf);
+    lv_obj_set_style_text_color(view.label, lv_color_hex(0xe67e22), 0);
+  } else {
+    lv_label_set_text(view.label, item.label);
+    lv_obj_set_style_text_color(view.label, lv_color_hex(0x8f8678), 0);
+  }
+
   lv_obj_set_style_bg_color(view.accent, lv_color_hex(item.done ? 0xc8c0b4 : item.color), 0);
   lv_obj_set_style_bg_color(view.check, lv_color_hex(item.done ? 0x2f7d4f : 0xf7f1e7), 0);
   lv_obj_set_style_border_color(view.check, lv_color_hex(item.done ? 0x2f7d4f : item.color), 0);
   lv_obj_set_style_text_color(view.member, lv_color_hex(item.done ? 0x8d857b : item.color), 0);
   lv_obj_set_style_text_color(view.title, lv_color_hex(item.done ? 0x8b8378 : 0x171512), 0);
-  lv_obj_set_style_text_color(view.label, lv_color_hex(0x8f8678), 0);
   lv_obj_set_style_text_color(view.status, lv_color_hex(item.done ? 0xffffff : item.color), 0);
   lv_label_set_text(view.status, item.done ? "✓" : "");
   lv_obj_invalidate(view.card);
@@ -1031,7 +1075,7 @@ void render_tasks() {
     make_static_touch_obj(panel);
     lv_obj_set_style_radius(panel, 12, 0);
     lv_obj_set_style_bg_color(panel, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_bg_opa(panel, LV_OPA_80, 0);
+    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(panel, lv_color_hex(0xeee7da), 0);
     lv_obj_set_style_border_width(panel, 1, 0);
     lv_obj_set_style_pad_all(panel, 26, 0);
@@ -1141,12 +1185,14 @@ void build_task_grid() {
 void brightness_slider_event(lv_event_t *) {
   brightness_percent = lv_slider_get_value(brightness_slider);
   update_brightness_visuals();
-  lv_obj_invalidate(brightness_overlay);
 }
 
 void update_brightness_visuals() {
-  uint8_t dim_opa = brightness_percent >= 100 ? 0 : map(100 - brightness_percent, 0, 80, 0, 210);
-  lv_obj_set_style_bg_opa(brightness_overlay, dim_opa, 0);
+  if (brightness_overlay) {
+    lv_obj_set_style_bg_opa(brightness_overlay, LV_OPA_TRANSP, 0);
+    lv_obj_add_flag(brightness_overlay, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(brightness_overlay, LV_OBJ_FLAG_CLICKABLE);
+  }
 
   static char buffer[8];
   snprintf(buffer, sizeof(buffer), "%u%%", brightness_percent);
@@ -1176,15 +1222,15 @@ void set_brightness_panel_open(bool open) {
   if (open) {
     update_control_center_status();
   }
-  lv_obj_clear_flag(brightness_panel, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(brightness_overlay, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_clear_flag(brightness_overlay, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_y(brightness_panel, 22);
   if (open) {
-    lv_obj_add_flag(brightness_overlay, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(brightness_panel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(brightness_panel);
   } else {
-    lv_obj_clear_flag(brightness_overlay, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(brightness_panel, LV_OBJ_FLAG_HIDDEN);
   }
-  lv_obj_move_foreground(brightness_overlay);
-  lv_obj_move_foreground(brightness_panel);
-  lv_obj_set_y(brightness_panel, open ? 22 : -456);
 }
 
 void control_wifi_event(lv_event_t *) {
@@ -1237,19 +1283,21 @@ void build_brightness_controls() {
   lv_obj_set_style_pad_all(brightness_overlay, 0, 0);
   make_static_touch_obj(brightness_overlay);
   lv_obj_clear_flag(brightness_overlay, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_flag(brightness_overlay, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_event_cb(brightness_overlay, brightness_gesture_event, LV_EVENT_CLICKED, nullptr);
 
   brightness_panel = lv_obj_create(top_layer);
   lv_obj_set_size(brightness_panel, 760, 430);
-  lv_obj_align(brightness_panel, LV_ALIGN_TOP_MID, 0, -456);
+  lv_obj_align(brightness_panel, LV_ALIGN_TOP_MID, 0, 22);
   make_static_touch_obj(brightness_panel);
   lv_obj_set_style_radius(brightness_panel, 18, 0);
   lv_obj_set_style_bg_color(brightness_panel, lv_color_hex(0x2f312f), 0);
-  lv_obj_set_style_bg_opa(brightness_panel, LV_OPA_90, 0);
+  lv_obj_set_style_bg_opa(brightness_panel, LV_OPA_COVER, 0);
   lv_obj_set_style_border_color(brightness_panel, lv_color_hex(0xffffff), 0);
-  lv_obj_set_style_border_opa(brightness_panel, LV_OPA_20, 0);
+  lv_obj_set_style_border_opa(brightness_panel, LV_OPA_COVER, 0);
   lv_obj_set_style_border_width(brightness_panel, 1, 0);
   lv_obj_set_style_pad_all(brightness_panel, 20, 0);
+  lv_obj_add_flag(brightness_panel, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_event_cb(brightness_panel, brightness_gesture_event, LV_EVENT_CLICKED, nullptr);
 
   lv_obj_t *wifi_card = lv_obj_create(brightness_panel);
@@ -1259,10 +1307,10 @@ void build_brightness_controls() {
   lv_obj_add_flag(wifi_card, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_set_style_radius(wifi_card, 24, 0);
   lv_obj_set_style_bg_color(wifi_card, lv_color_hex(0x6b6f6d), 0);
-  lv_obj_set_style_bg_opa(wifi_card, LV_OPA_70, 0);
+  lv_obj_set_style_bg_opa(wifi_card, LV_OPA_COVER, 0);
   lv_obj_set_style_border_width(wifi_card, 1, 0);
   lv_obj_set_style_border_color(wifi_card, lv_color_hex(0xffffff), 0);
-  lv_obj_set_style_border_opa(wifi_card, LV_OPA_20, 0);
+  lv_obj_set_style_border_opa(wifi_card, LV_OPA_COVER, 0);
   lv_obj_add_event_cb(wifi_card, control_wifi_event, LV_EVENT_CLICKED, nullptr);
 
   lv_obj_t *wifi_icon = lv_obj_create(wifi_card);
@@ -1296,10 +1344,10 @@ void build_brightness_controls() {
   make_static_touch_obj(bt_card);
   lv_obj_set_style_radius(bt_card, 24, 0);
   lv_obj_set_style_bg_color(bt_card, lv_color_hex(0x737674), 0);
-  lv_obj_set_style_bg_opa(bt_card, LV_OPA_50, 0);
+  lv_obj_set_style_bg_opa(bt_card, LV_OPA_COVER, 0);
   lv_obj_set_style_border_width(bt_card, 1, 0);
   lv_obj_set_style_border_color(bt_card, lv_color_hex(0xffffff), 0);
-  lv_obj_set_style_border_opa(bt_card, LV_OPA_20, 0);
+  lv_obj_set_style_border_opa(bt_card, LV_OPA_COVER, 0);
   lv_obj_t *bt_label = lv_label_create(bt_card);
   lv_label_set_text(bt_label, "BT");
   lv_obj_set_style_text_font(bt_label, &lv_font_montserrat_24, 0);
@@ -1313,10 +1361,10 @@ void build_brightness_controls() {
   lv_obj_add_flag(sync_card, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_set_style_radius(sync_card, 24, 0);
   lv_obj_set_style_bg_color(sync_card, lv_color_hex(0x737674), 0);
-  lv_obj_set_style_bg_opa(sync_card, LV_OPA_50, 0);
+  lv_obj_set_style_bg_opa(sync_card, LV_OPA_COVER, 0);
   lv_obj_set_style_border_width(sync_card, 1, 0);
   lv_obj_set_style_border_color(sync_card, lv_color_hex(0xffffff), 0);
-  lv_obj_set_style_border_opa(sync_card, LV_OPA_20, 0);
+  lv_obj_set_style_border_opa(sync_card, LV_OPA_COVER, 0);
   lv_obj_add_event_cb(sync_card, control_sync_event, LV_EVENT_CLICKED, nullptr);
   lv_obj_t *sync_label = lv_label_create(sync_card);
   lv_label_set_text(sync_label, "SYNC");
@@ -1334,10 +1382,10 @@ void build_brightness_controls() {
   make_static_touch_obj(brightness_card);
   lv_obj_set_style_radius(brightness_card, 36, 0);
   lv_obj_set_style_bg_color(brightness_card, lv_color_hex(0x777a78), 0);
-  lv_obj_set_style_bg_opa(brightness_card, LV_OPA_60, 0);
+  lv_obj_set_style_bg_opa(brightness_card, LV_OPA_COVER, 0);
   lv_obj_set_style_border_width(brightness_card, 1, 0);
   lv_obj_set_style_border_color(brightness_card, lv_color_hex(0xffffff), 0);
-  lv_obj_set_style_border_opa(brightness_card, LV_OPA_20, 0);
+  lv_obj_set_style_border_opa(brightness_card, LV_OPA_COVER, 0);
 
   lv_obj_t *label = lv_label_create(brightness_card);
   lv_label_set_text(label, "LIGHT");
@@ -1354,7 +1402,7 @@ void build_brightness_controls() {
   lv_obj_set_style_radius(brightness_slider, 34, LV_PART_MAIN);
   lv_obj_set_style_radius(brightness_slider, 34, LV_PART_INDICATOR);
   lv_obj_set_style_bg_color(brightness_slider, lv_color_hex(0xe7e2d8), LV_PART_MAIN);
-  lv_obj_set_style_bg_opa(brightness_slider, LV_OPA_90, LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(brightness_slider, LV_OPA_COVER, LV_PART_MAIN);
   lv_obj_set_style_bg_color(brightness_slider, lv_color_hex(0xf1c45b), LV_PART_INDICATOR);
   lv_obj_set_style_bg_color(brightness_slider, lv_color_hex(0xfffdfa), LV_PART_KNOB);
   lv_obj_set_style_pad_all(brightness_slider, 12, LV_PART_KNOB);
@@ -1372,10 +1420,10 @@ void build_brightness_controls() {
   make_static_touch_obj(device_card);
   lv_obj_set_style_radius(device_card, 36, 0);
   lv_obj_set_style_bg_color(device_card, lv_color_hex(0x777a78), 0);
-  lv_obj_set_style_bg_opa(device_card, LV_OPA_50, 0);
+  lv_obj_set_style_bg_opa(device_card, LV_OPA_COVER, 0);
   lv_obj_set_style_border_width(device_card, 1, 0);
   lv_obj_set_style_border_color(device_card, lv_color_hex(0xffffff), 0);
-  lv_obj_set_style_border_opa(device_card, LV_OPA_20, 0);
+  lv_obj_set_style_border_opa(device_card, LV_OPA_COVER, 0);
   lv_obj_t *device_label = lv_label_create(device_card);
   lv_label_set_text(device_label, "LifeTodo");
   lv_obj_set_style_text_font(device_label, &lv_font_montserrat_24, 0);
@@ -1399,7 +1447,7 @@ void build_brightness_controls() {
   lv_obj_clear_flag(handle, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_set_style_radius(handle, 7, 0);
   lv_obj_set_style_bg_color(handle, lv_color_hex(0x171512), 0);
-  lv_obj_set_style_bg_opa(handle, LV_OPA_30, 0);
+  lv_obj_set_style_bg_opa(handle, LV_OPA_COVER, 0);
   lv_obj_set_style_border_width(handle, 0, 0);
 }
 
@@ -1952,6 +2000,7 @@ void setup() {
   LOG_SERIAL.println("Touch init begin");
   touch.begin();
   Wire.setClock(TOUCH_I2C_HZ);
+  Wire.setTimeOut(TOUCH_I2C_TIMEOUT_MS);
   // Waveshare's official ESP32-S3-Touch-LCD-4.3 touch config uses no swap
   // and no X/Y mirror. In TAMC_GT911 this corresponds to ROTATION_INVERTED.
   touch.setRotation(ROTATION_INVERTED);
