@@ -120,9 +120,7 @@ function bindEvents() {
     render();
   });
 
-  document.querySelectorAll('input[name="assigneeMode"]').forEach((el) => {
-    el.addEventListener("change", updateAssigneeModeFields);
-  });
+  document.querySelector("#assigneeSelect")?.addEventListener("change", updateAssigneeModeFields);
 
   document.querySelector("#memberForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -171,26 +169,28 @@ function parseRecurrence(form) {
 }
 
 function parseAssignee(form) {
-  const mode = form.get("assigneeMode");
-  if (mode === "cycle") {
+  const selected = String(form.get("assigneeId") || "");
+  if (selected === "CYCLE_ALL") {
+    const allIds = state().members.map((m) => m.id);
+    return { assigneeIds: allIds, assigneeId: allIds[0] || "" };
+  }
+  if (selected === "CYCLE_SELECT") {
     const ids = form.getAll("cycleMemberId").map(String).filter(Boolean);
     if (ids.length > 0) {
       return { assigneeIds: ids, assigneeId: ids[0] };
     }
+    const allIds = state().members.map((m) => m.id);
+    return { assigneeIds: allIds, assigneeId: allIds[0] || "" };
   }
-  const id = String(form.get("assigneeId") || "");
-  return { assigneeIds: id ? [id] : [], assigneeId: id };
+  return { assigneeIds: selected ? [selected] : [], assigneeId: selected };
 }
 
 function updateAssigneeModeFields() {
-  const mode = document.querySelector('input[name="assigneeMode"]:checked')?.value || "single";
-  const singleField = document.querySelector("#singleAssigneeField");
+  const select = document.querySelector("#assigneeSelect");
   const cycleField = document.querySelector("#cycleAssigneeField");
-  if (mode === "cycle") {
-    singleField?.classList.add("hidden");
+  if (select?.value === "CYCLE_SELECT") {
     cycleField?.classList.remove("hidden");
   } else {
-    singleField?.classList.remove("hidden");
     cycleField?.classList.add("hidden");
   }
 }
@@ -276,20 +276,26 @@ function renderAssigneeOptions() {
   const cycleContainer = document.querySelector("#cycleMembersContainer");
   const members = state().members;
   if (select) {
-    select.innerHTML = members
+    const memberOptions = members
       .map((member) => `<option value="${member.id}">${escapeHtml(member.name)}</option>`)
       .join("");
+    select.innerHTML = `
+      <option value="CYCLE_ALL">🔄 循环（全部成员 · 一人一次）</option>
+      ${memberOptions}
+      <option value="CYCLE_SELECT">🔄 循环（自定义勾选参与成员...）</option>
+    `;
   }
   if (cycleContainer) {
     cycleContainer.innerHTML = members
-      .map((member, idx) => `
+      .map((member) => `
         <label class="checkbox-label">
-          <input type="checkbox" name="cycleMemberId" value="${member.id}" ${idx <= 1 ? "checked" : ""}>
+          <input type="checkbox" name="cycleMemberId" value="${member.id}" checked>
           <span class="dot" style="--accent:${member.color}"></span>${escapeHtml(member.name)}
         </label>
       `)
       .join("");
   }
+  updateAssigneeModeFields();
 }
 
 function renderSummary() {

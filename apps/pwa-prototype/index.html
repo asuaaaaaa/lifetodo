@@ -39,19 +39,12 @@
               <span>事项</span>
               <input name="title" required placeholder="比如：铲猫砂盆">
             </label>
-            <div class="assignee-mode-section">
-              <span>分配模式</span>
-              <div class="radio-group">
-                <label class="radio-label"><input type="radio" name="assigneeMode" value="single" checked> 固定成员</label>
-                <label class="radio-label"><input type="radio" name="assigneeMode" value="cycle"> 选项循环 (轮流)</label>
-              </div>
-            </div>
             <label id="singleAssigneeField">
-              <span>成员</span>
+              <span>选择成员 (支持循环 · 一人一次)</span>
               <select name="assigneeId" id="assigneeSelect"></select>
             </label>
             <div id="cycleAssigneeField" class="hidden">
-              <span>循环候选成员 (按勾选顺序轮休轮转)</span>
+              <span>勾选参与循环成员 (打卡后一人一次轮流)</span>
               <div class="checkbox-group" id="cycleMembersContainer"></div>
             </div>
             <label>
