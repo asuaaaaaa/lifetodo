@@ -15,7 +15,14 @@ const defaultAlertChatId = "oc_e0fade30cf1d453b162f7a8748d3bab9";
 const staticRoot = resolve("apps/pwa-prototype");
 const execFile = promisify(nodeExecFile);
 
-export function createApiHandler({ store, seed = defaultSeed, now = () => new Date(), notifySyncFailure = sendLarkAlert, notifyAlert = sendLarkAlert } = {}) {
+export function createApiHandler({
+  store,
+  seed = defaultSeed,
+  now = () => new Date(),
+  notifySyncFailure = sendLarkAlert,
+  notifyAlert = sendLarkAlert,
+  weatherProvider = fetchBeijingChaoyangWeather
+} = {}) {
   const alertNotifier = notifyAlert || notifySyncFailure;
   return async function handle(request) {
     const url = new URL(request.url);
@@ -27,7 +34,7 @@ export function createApiHandler({ store, seed = defaultSeed, now = () => new Da
 
     try {
       if (url.pathname === "/api/state" && request.method === "GET") {
-        const state = await readOrSeed(store, homeId, seed);
+        const state = await readOrSeed(store, homeId, seed, now);
         await checkAndNotifyOverdueTasks(state, homeId, alertNotifier, now);
         return jsonResponse({ homeId, state });
       }
@@ -44,7 +51,7 @@ export function createApiHandler({ store, seed = defaultSeed, now = () => new Da
         if (!body.taskId || !body.date) {
           return jsonResponse({ error: "taskId and date are required" }, 400);
         }
-        const state = await readOrSeed(store, homeId, seed);
+        const state = await readOrSeed(store, homeId, seed, now);
         setCompletion(state, body.taskId, body.date, body.completed !== false, body.source || "api", now);
         await checkAndNotifyOverdueTasks(state, homeId, alertNotifier, now);
         await store.writeState(homeId, state, body.source || "api");
@@ -52,9 +59,14 @@ export function createApiHandler({ store, seed = defaultSeed, now = () => new Da
       }
 
       if (url.pathname === "/api/tasks/check-overdue" && (request.method === "POST" || request.method === "GET")) {
-        const state = await readOrSeed(store, homeId, seed);
+        const state = await readOrSeed(store, homeId, seed, now);
         const notifiedCount = await checkAndNotifyOverdueTasks(state, homeId, alertNotifier, now);
         return jsonResponse({ homeId, notifiedCount, ok: true });
+      }
+
+      if (url.pathname === "/api/weather" && request.method === "GET") {
+        const weather = await weatherProvider(now);
+        return jsonResponse({ homeId, weather });
       }
 
       if (url.pathname === "/api/devices/heartbeat" && request.method === "POST") {
@@ -62,7 +74,7 @@ export function createApiHandler({ store, seed = defaultSeed, now = () => new Da
         if (!body.deviceId) {
           return jsonResponse({ error: "deviceId is required" }, 400);
         }
-        const state = await readOrSeed(store, homeId, seed);
+        const state = await readOrSeed(store, homeId, seed, now);
         state.devices = upsertDevice(state.devices, {
           id: body.deviceId,
           name: body.name || body.deviceId,
@@ -97,6 +109,57 @@ export function createApiHandler({ store, seed = defaultSeed, now = () => new Da
       return jsonResponse({ error: error.message || "Internal server error" }, 500);
     }
   };
+}
+
+async function fetchBeijingChaoyangWeather(now = () => new Date()) {
+  const url = new URL("https://api.open-meteo.com/v1/forecast");
+  url.searchParams.set("latitude", "39.93");
+  url.searchParams.set("longitude", "116.47");
+  url.searchParams.set("current", "temperature_2m,weather_code,precipitation");
+  url.searchParams.set("hourly", "precipitation_probability,precipitation");
+  url.searchParams.set("forecast_days", "1");
+  url.searchParams.set("timezone", "Asia/Shanghai");
+
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Weather provider returned ${response.status}`);
+  }
+  const data = await response.json();
+  return normalizeWeather(data, now());
+}
+
+function normalizeWeather(data, date = new Date()) {
+  const current = data?.current || {};
+  const hourly = data?.hourly || {};
+  const temp = Number(current.temperature_2m);
+  const code = Number(current.weather_code);
+  const precipitation = Number(current.precipitation || 0);
+  const probabilities = Array.isArray(hourly.precipitation_probability) ? hourly.precipitation_probability : [];
+  const precipitations = Array.isArray(hourly.precipitation) ? hourly.precipitation : [];
+  const maxProbability = probabilities.reduce((max, value) => Math.max(max, Number(value) || 0), 0);
+  const maxPrecipitation = precipitations.reduce((max, value) => Math.max(max, Number(value) || 0), 0);
+  const rainy = precipitation > 0 || maxProbability >= 45 || maxPrecipitation > 0;
+
+  return {
+    location: "北京朝阳 时间国际",
+    temperatureC: Number.isFinite(temp) ? Math.round(temp) : null,
+    condition: weatherCodeLabel(code),
+    rainExpected: rainy,
+    rainText: rainy ? (maxProbability >= 60 || precipitation > 0 ? "今天可能下雨" : "近期有雨") : "天气正常",
+    precipitationProbability: maxProbability,
+    updatedAt: date.toISOString()
+  };
+}
+
+function weatherCodeLabel(code) {
+  if ([0].includes(code)) return "晴";
+  if ([1, 2, 3].includes(code)) return "多云";
+  if ([45, 48].includes(code)) return "有雾";
+  if ([51, 53, 55, 56, 57].includes(code)) return "小雨";
+  if ([61, 63, 65, 66, 67, 80, 81, 82].includes(code)) return "下雨";
+  if ([71, 73, 75, 77, 85, 86].includes(code)) return "下雪";
+  if ([95, 96, 99].includes(code)) return "雷雨";
+  return "天气";
 }
 
 async function sendLarkAlert(text) {
@@ -176,10 +239,10 @@ export function createLifeTodoServer({ store = createLarkBaseStore(), seed = def
   });
 }
 
-async function readOrSeed(store, homeId, seed) {
+async function readOrSeed(store, homeId, seed, now = () => new Date()) {
   const state = await store.readState(homeId, seed);
-  if (state) return normalizeState(state);
-  return normalizeState(seed);
+  if (state) return normalizeState(state, now);
+  return normalizeState(seed, now);
 }
 
 function jsonResponse(body, status = 200) {

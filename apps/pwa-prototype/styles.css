@@ -244,6 +244,46 @@ h1 {
   margin-bottom: 18px;
 }
 
+.assignee-mode-field {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.assignee-mode-field legend {
+  grid-column: 1 / -1;
+  margin-bottom: 2px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.mode-option {
+  min-height: 42px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 253, 250, 0.82);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.mode-option input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.mode-option:has(input:checked) {
+  border-color: rgba(107, 163, 111, 0.64);
+  background: var(--wash);
+  color: var(--ink);
+  box-shadow: 0 8px 22px rgba(42, 33, 22, 0.07);
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: 1fr;
@@ -259,6 +299,28 @@ label span {
   margin-bottom: 6px;
   color: var(--muted);
   font-size: 13px;
+}
+
+.checkbox-group {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.checkbox-label {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 253, 250, 0.82);
+  padding: 8px 10px;
+  color: var(--ink);
+}
+
+.checkbox-label input {
+  accent-color: var(--green);
 }
 
 .inline-field {

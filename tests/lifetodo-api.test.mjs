@@ -183,3 +183,30 @@ test("POST /api/tasks/check-overdue sends strong alert to Lark lobster group whe
   assert.match(alertText, /猪猪/);
 });
 
+test("GET /api/weather returns Beijing Chaoyang weather summary", async () => {
+  const handler = createApiHandler({
+    store: {
+      readState: async () => ({ members: [], tasks: [], devices: [], completions: {} }),
+      writeState: async () => {}
+    },
+    seed: { members: [], tasks: [], devices: [], completions: {} },
+    weatherProvider: async () => ({
+      location: "北京朝阳 时间国际",
+      temperatureC: 29,
+      condition: "多云",
+      rainExpected: true,
+      rainText: "今天可能下雨",
+      precipitationProbability: 72,
+      updatedAt: "2026-07-07T08:00:00.000Z"
+    })
+  });
+
+  const response = await handler(new Request("http://localhost/api/weather?home=demo-home"));
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(body.homeId, "demo-home");
+  assert.equal(body.weather.location, "北京朝阳 时间国际");
+  assert.equal(body.weather.temperatureC, 29);
+  assert.equal(body.weather.rainText, "今天可能下雨");
+});

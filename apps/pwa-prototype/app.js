@@ -120,7 +120,9 @@ function bindEvents() {
     render();
   });
 
-  document.querySelector("#assigneeSelect")?.addEventListener("change", updateAssigneeModeFields);
+  document.querySelectorAll("input[name='assigneeMode']").forEach((input) => {
+    input.addEventListener("change", updateAssigneeModeFields);
+  });
 
   document.querySelector("#memberForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -169,12 +171,12 @@ function parseRecurrence(form) {
 }
 
 function parseAssignee(form) {
-  const selected = String(form.get("assigneeId") || "");
-  if (selected === "CYCLE_ALL") {
+  const mode = String(form.get("assigneeMode") || "single");
+  if (mode === "cycleAll") {
     const allIds = state().members.map((m) => m.id);
     return { assigneeIds: allIds, assigneeId: allIds[0] || "" };
   }
-  if (selected === "CYCLE_SELECT") {
+  if (mode === "cycleSelect") {
     const ids = form.getAll("cycleMemberId").map(String).filter(Boolean);
     if (ids.length > 0) {
       return { assigneeIds: ids, assigneeId: ids[0] };
@@ -182,13 +184,20 @@ function parseAssignee(form) {
     const allIds = state().members.map((m) => m.id);
     return { assigneeIds: allIds, assigneeId: allIds[0] || "" };
   }
+  const selected = String(form.get("singleAssigneeId") || "");
   return { assigneeIds: selected ? [selected] : [], assigneeId: selected };
 }
 
 function updateAssigneeModeFields() {
-  const select = document.querySelector("#assigneeSelect");
+  const mode = document.querySelector("input[name='assigneeMode']:checked")?.value || "single";
+  const singleField = document.querySelector("#singleAssigneeField");
   const cycleField = document.querySelector("#cycleAssigneeField");
-  if (select?.value === "CYCLE_SELECT") {
+  if (mode === "single") {
+    singleField?.classList.remove("hidden");
+  } else {
+    singleField?.classList.add("hidden");
+  }
+  if (mode === "cycleSelect") {
     cycleField?.classList.remove("hidden");
   } else {
     cycleField?.classList.add("hidden");
@@ -276,20 +285,23 @@ function renderAssigneeOptions() {
   const cycleContainer = document.querySelector("#cycleMembersContainer");
   const members = state().members;
   if (select) {
+    const previous = select.value;
     const memberOptions = members
       .map((member) => `<option value="${member.id}">${escapeHtml(member.name)}</option>`)
       .join("");
-    select.innerHTML = `
-      <option value="CYCLE_ALL">🔄 循环（全部成员 · 一人一次）</option>
-      ${memberOptions}
-      <option value="CYCLE_SELECT">🔄 循环（自定义勾选参与成员...）</option>
-    `;
+    select.innerHTML = memberOptions;
+    if (members.some((member) => member.id === previous)) {
+      select.value = previous;
+    }
   }
   if (cycleContainer) {
+    const selected = new Set(
+      [...cycleContainer.querySelectorAll("input[name='cycleMemberId']:checked")].map((input) => input.value)
+    );
     cycleContainer.innerHTML = members
       .map((member) => `
         <label class="checkbox-label">
-          <input type="checkbox" name="cycleMemberId" value="${member.id}" checked>
+          <input type="checkbox" name="cycleMemberId" value="${member.id}" ${selected.size === 0 || selected.has(member.id) ? "checked" : ""}>
           <span class="dot" style="--accent:${member.color}"></span>${escapeHtml(member.name)}
         </label>
       `)
@@ -348,8 +360,7 @@ function taskButton(task) {
     badges += `<span class="pending-front-badge">⏳ 上次未做 (${task.lastReminderDate || "前次"}) · 前置</span>`;
   }
   if (task.cycleInfo?.enabled) {
-    const cycleNames = task.cycleInfo.options.map((id) => state().members.find((m) => m.id === id)?.name || id).join("⇄");
-    badges += `<span class="cycle-badge">⇄ ${cycleNames}</span>`;
+    badges += `<span class="cycle-badge">${cycleSummary(task)}</span>`;
   }
 
   return `
@@ -372,8 +383,7 @@ function renderTasks() {
       const member = state().members.find((item) => item.id === task.assigneeId) || state().members[0];
       let metaText = `${escapeHtml(member?.name || "未分配")} · ${escapeHtml(task.label)}`;
       if (task.cycleInfo?.enabled) {
-        const cycleNames = task.cycleInfo.options.map((id) => state().members.find((m) => m.id === id)?.name || id).join(" -> ");
-        metaText = `[选项循环轮转] ${cycleNames} (本次负责: ${escapeHtml(member?.name || task.assigneeId)}) · ${escapeHtml(task.label)}`;
+        metaText = `${cycleSummary(task)} · ${escapeHtml(task.label)}`;
       }
       return `
         <section class="member-section">
@@ -393,6 +403,13 @@ function renderTasks() {
     })
     .join("");
   bindTaskManagementButtons();
+}
+
+function cycleSummary(task) {
+  const names = task.cycleInfo.options.map((id) => state().members.find((m) => m.id === id)?.name || id);
+  const current = state().members.find((m) => m.id === task.assigneeId)?.name || task.assigneeId;
+  const next = state().members.find((m) => m.id === task.cycleInfo.nextAssigneeId)?.name || task.cycleInfo.nextAssigneeId;
+  return `轮流 ${names.join(" → ")} · 本次 ${current} · 下次 ${next}`;
 }
 
 function renderMembers() {

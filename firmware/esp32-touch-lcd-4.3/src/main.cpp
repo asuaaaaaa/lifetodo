@@ -34,6 +34,8 @@ LV_FONT_DECLARE(lifetodo_pingfang_28);
 namespace {
 constexpr uint16_t SCREEN_W = 800;
 constexpr uint16_t SCREEN_H = 480;
+constexpr uint16_t TASK_GRID_W = 560;
+constexpr uint16_t INFO_PANEL_W = 180;
 constexpr int32_t RGB_PCLK_HZ = 14000000;
 constexpr uint16_t LVGL_DRAW_BUF_LINES = 40;
 constexpr uint32_t TOUCH_I2C_HZ = 100000;
@@ -55,6 +57,8 @@ constexpr uint32_t CLOUD_SYNC_RETRY_MAX_MS = 120000;
 constexpr uint32_t SYNC_FAILURE_REPORT_RETRY_MS = 60000;
 constexpr uint32_t WIFI_CONNECT_TIMEOUT_MS = 12000;
 constexpr uint32_t CLOUD_SYNC_RETRY_DELAY_MS = 1200;
+constexpr uint32_t WEATHER_SYNC_INTERVAL_MS = 900000;
+constexpr uint32_t CLOCK_UPDATE_INTERVAL_MS = 30000;
 constexpr uint32_t TIME_SYNC_TIMEOUT_MS = 9000;
 constexpr uint16_t DNS_PORT = 53;
 constexpr uint8_t CLOUD_SYNC_ATTEMPTS = 3;
@@ -125,6 +129,10 @@ lv_obj_t *root;
 lv_obj_t *status_label;
 lv_obj_t *summary_label;
 lv_obj_t *task_grid;
+lv_obj_t *info_time_label;
+lv_obj_t *info_temp_label;
+lv_obj_t *info_weather_label;
+lv_obj_t *info_rain_label;
 lv_obj_t *brightness_overlay;
 lv_obj_t *brightness_panel;
 lv_obj_t *brightness_slider;
@@ -148,6 +156,8 @@ lv_obj_t *task_page_label;
 uint32_t last_heartbeat_ms = 0;
 uint32_t last_touch_log_ms = 0;
 uint32_t last_cloud_sync_ms = 0;
+uint32_t last_weather_sync_ms = 0;
+uint32_t last_clock_update_ms = 0;
 uint32_t next_cloud_sync_ms = 0;
 uint32_t next_sync_failure_report_ms = 0;
 uint32_t wifi_connect_started_ms = 0;
@@ -161,6 +171,9 @@ uint8_t cloud_sync_failure_streak = 0;
 bool sync_failure_report_pending = false;
 char last_sync_error[64] = "";
 char today_key[11] = "2026-07-01";
+char weather_temp_text[16] = "--";
+char weather_condition_text[24] = "天气同步中";
+char weather_rain_text[32] = "天气同步中";
 String pending_wifi_ssid;
 String pending_wifi_password;
 String provisioning_ap_ssid;
@@ -234,12 +247,17 @@ void set_brightness_panel_open(bool open);
 void update_brightness_visuals();
 void disable_scroll(lv_obj_t *obj);
 void make_static_touch_obj(lv_obj_t *obj);
+void constrain_label(lv_obj_t *label, int16_t width, lv_label_long_mode_t mode);
 void apply_task_view(size_t index);
 void update_summary();
 void render_tasks();
 void update_task_page();
+void build_info_panel();
+void update_clock_label();
+void update_weather_labels();
 bool handle_task_touch_release(int16_t dx, int16_t dy);
 bool sync_from_cloud();
+bool sync_weather();
 bool push_completion_to_cloud(const char *task_id, bool completed);
 void queue_completion_sync(const char *task_id, bool completed);
 void process_sync_failure_report();
@@ -266,6 +284,11 @@ void set_cjk_font(lv_obj_t *obj) {
 
 void set_cjk_title_font(lv_obj_t *obj) {
   lv_obj_set_style_text_font(obj, &lifetodo_pingfang_28, 0);
+}
+
+void constrain_label(lv_obj_t *label, int16_t width, lv_label_long_mode_t mode) {
+  lv_obj_set_width(label, width);
+  lv_label_set_long_mode(label, mode);
 }
 
 void disable_scroll(lv_obj_t *obj) {
@@ -342,6 +365,10 @@ String api_url(const char *path) {
 
 String state_api_url() {
   return api_url("/api/state?home=") + LIFETODO_HOME_ID;
+}
+
+String weather_api_url() {
+  return api_url("/api/weather?home=") + LIFETODO_HOME_ID;
 }
 
 String completions_api_url() {
@@ -626,6 +653,79 @@ bool apply_cloud_document(const String &payload) {
   return true;
 }
 
+void update_clock_label() {
+  if (!info_time_label) return;
+  struct tm timeinfo;
+  if (getLocalTime(&timeinfo, 20)) {
+    char buffer[16];
+    strftime(buffer, sizeof(buffer), "%H:%M", &timeinfo);
+    lv_label_set_text(info_time_label, buffer);
+  } else {
+    lv_label_set_text(info_time_label, "--:--");
+  }
+}
+
+void update_weather_labels() {
+  if (info_temp_label) lv_label_set_text(info_temp_label, weather_temp_text);
+  if (info_weather_label) lv_label_set_text(info_weather_label, weather_condition_text);
+  if (info_rain_label) lv_label_set_text(info_rain_label, weather_rain_text);
+}
+
+bool apply_weather_document(const String &payload) {
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, payload);
+  if (err) {
+    LOG_SERIAL.printf("Weather JSON parse failed: %s\n", err.c_str());
+    return false;
+  }
+
+  JsonObject weather = doc["weather"].as<JsonObject>();
+  if (weather.isNull()) return false;
+
+  int temp = weather["temperatureC"] | 999;
+  if (temp == 999) {
+    copy_text(weather_temp_text, sizeof(weather_temp_text), "--");
+  } else {
+    char temp_buffer[16];
+    snprintf(temp_buffer, sizeof(temp_buffer), "%d°C", temp);
+    copy_text(weather_temp_text, sizeof(weather_temp_text), temp_buffer);
+  }
+  copy_text(weather_condition_text, sizeof(weather_condition_text), weather["condition"] | "天气");
+  copy_text(weather_rain_text, sizeof(weather_rain_text), weather["rainText"] | "天气正常");
+  update_weather_labels();
+  LOG_SERIAL.printf("Weather sync ok temp=%s condition=%s rain=%s\n",
+                    weather_temp_text, weather_condition_text, weather_rain_text);
+  return true;
+}
+
+bool sync_weather() {
+  if (WiFi.status() != WL_CONNECTED) return false;
+
+  WiFiClient plain_client;
+  WiFiClientSecure client;
+  HTTPClient http;
+  String url = weather_api_url();
+  LOG_SERIAL.printf("LifeTodo weather GET url=%s\n", url.c_str());
+  http.setTimeout(12000);
+  http.setReuse(false);
+  http.useHTTP10(true);
+  http.addHeader("Connection", "close");
+  if (!begin_lifetodo_http(http, plain_client, client, url)) {
+    LOG_SERIAL.println("Weather HTTP begin failed");
+    return false;
+  }
+
+  int code = http.GET();
+  String payload = http.getString();
+  http.end();
+  if (code != 200) {
+    LOG_SERIAL.printf("Weather GET failed code=%d payload=%s\n", code, payload.c_str());
+    return false;
+  }
+  last_weather_sync_ms = millis();
+  return apply_weather_document(payload);
+}
+
 bool sync_from_cloud() {
   if (WiFi.status() != WL_CONNECTED) return false;
   wait_for_time_sync();
@@ -674,6 +774,7 @@ bool sync_from_cloud() {
       record_sync_success();
       update_summary();
       render_tasks();
+      sync_weather();
       lv_label_set_text(status_label, task_count == 0 ? "暂无待办" : "飞书已连接");
       return true;
     }
@@ -852,22 +953,70 @@ void read_touch(lv_indev_drv_t *, lv_indev_data_t *data) {
   }
 }
 
+bool gt911_write_reg(uint16_t reg, uint8_t value) {
+  Wire.beginTransmission(GT911_ADDR1);
+  Wire.write(highByte(reg));
+  Wire.write(lowByte(reg));
+  Wire.write(value);
+  return Wire.endTransmission() == 0;
+}
+
+bool gt911_read_reg(uint16_t reg, uint8_t *buffer, uint8_t size) {
+  Wire.beginTransmission(GT911_ADDR1);
+  Wire.write(highByte(reg));
+  Wire.write(lowByte(reg));
+  if (Wire.endTransmission(false) != 0) {
+    return false;
+  }
+  uint8_t received = Wire.requestFrom(GT911_ADDR1, size);
+  if (received != size) {
+    while (Wire.available()) Wire.read();
+    return false;
+  }
+  for (uint8_t i = 0; i < size; i++) {
+    buffer[i] = Wire.read();
+  }
+  return true;
+}
+
+TouchState read_gt911_sample() {
+  TouchState sample;
+  sample.updated_ms = millis();
+
+  uint8_t point_info = 0;
+  if (!gt911_read_reg(GT911_POINT_INFO, &point_info, 1)) {
+    return sample;
+  }
+
+  uint8_t buffer_status = (point_info >> 7) & 1;
+  uint8_t touches = point_info & 0x0f;
+  if (!buffer_status || touches == 0) {
+    if (buffer_status) gt911_write_reg(GT911_POINT_INFO, 0);
+    return sample;
+  }
+
+  uint8_t data[7] = {};
+  if (!gt911_read_reg(GT911_POINT_1, data, sizeof(data))) {
+    gt911_write_reg(GT911_POINT_INFO, 0);
+    return sample;
+  }
+  gt911_write_reg(GT911_POINT_INFO, 0);
+
+  int16_t x = static_cast<int16_t>(data[1] | (data[2] << 8));
+  int16_t y = static_cast<int16_t>(data[3] | (data[4] << 8));
+  if (x < 0 || x >= SCREEN_W || y < 0 || y >= SCREEN_H) {
+    return sample;
+  }
+
+  sample.touched = true;
+  sample.x = x;
+  sample.y = y;
+  return sample;
+}
+
 void touch_sample_task(void *) {
   for (;;) {
-    touch.read();
-
-    TouchState sample;
-    sample.touched = touch.isTouched;
-    if (touch.isTouched) {
-      sample.x = touch.points[0].x;
-      sample.y = touch.points[0].y;
-      if (sample.x < 0 || sample.x >= SCREEN_W || sample.y < 0 || sample.y >= SCREEN_H) {
-        sample.touched = false;
-        sample.x = 0;
-        sample.y = 0;
-      }
-    }
-    sample.updated_ms = millis();
+    TouchState sample = read_gt911_sample();
 
     portENTER_CRITICAL(&touch_state_mux);
     latest_touch = sample;
@@ -1033,7 +1182,7 @@ void update_task_page() {
 
 bool handle_task_touch_release(int16_t dx, int16_t dy) {
   if (brightness_panel_open || task_count == 0) return false;
-  if (touch_start_x < 20 || touch_start_x > 780 || touch_start_y < 118 || touch_start_y > 420) return false;
+  if (touch_start_x < 20 || touch_start_x > 20 + TASK_GRID_W || touch_start_y < 118 || touch_start_y > 420) return false;
 
   if (abs(dy) >= 30 && abs(dy) >= abs(dx) * 2) {
     if (task_count <= TASKS_PER_PAGE) return true;
@@ -1071,7 +1220,7 @@ void render_tasks() {
 
   if (task_count == 0) {
     lv_obj_t *panel = lv_obj_create(task_grid);
-    lv_obj_set_size(panel, 760, 236);
+    lv_obj_set_size(panel, TASK_GRID_W, 236);
     make_static_touch_obj(panel);
     lv_obj_set_style_radius(panel, 12, 0);
     lv_obj_set_style_bg_color(panel, lv_color_hex(0xffffff), 0);
@@ -1083,14 +1232,14 @@ void render_tasks() {
     lv_obj_t *title = lv_label_create(panel);
     lv_label_set_text(title, cloud_ready ? "今天没有安排" : "正在同步飞书");
     set_cjk_title_font(title);
+    constrain_label(title, TASK_GRID_W - 80, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_color(title, lv_color_hex(0x171512), 0);
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 10);
 
     lv_obj_t *body = lv_label_create(panel);
     lv_label_set_text(body, cloud_ready ? "可以放心做自己的事，新的家庭事项会自动出现。" : "保持设备联网，稍后会自动刷新。");
     set_cjk_font(body);
-    lv_obj_set_width(body, 680);
-    lv_label_set_long_mode(body, LV_LABEL_LONG_WRAP);
+    constrain_label(body, TASK_GRID_W - 80, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_color(body, lv_color_hex(0x776f64), 0);
     lv_obj_align(body, LV_ALIGN_TOP_LEFT, 0, 68);
     return;
@@ -1098,7 +1247,7 @@ void render_tasks() {
 
   for (size_t slot = 0; slot < TASKS_PER_PAGE; slot++) {
     lv_obj_t *btn = lv_obj_create(task_grid);
-    lv_obj_set_size(btn, 760, 88);
+    lv_obj_set_size(btn, TASK_GRID_W, 88);
     lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, slot * 98);
     make_static_touch_obj(btn);
     task_views[slot].card = btn;
@@ -1125,22 +1274,20 @@ void render_tasks() {
     task_views[slot].status = done;
 
     lv_obj_t *member = lv_label_create(btn);
-    lv_obj_set_width(member, 110);
+    constrain_label(member, 92, LV_LABEL_LONG_DOT);
     set_cjk_font(member);
     lv_obj_align(member, LV_ALIGN_TOP_RIGHT, -22, 15);
     task_views[slot].member = member;
 
     lv_obj_t *title = lv_label_create(btn);
-    lv_obj_set_width(title, 470);
+    constrain_label(title, 318, LV_LABEL_LONG_DOT);
     set_cjk_title_font(title);
-    lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 82, 12);
     task_views[slot].title = title;
 
     lv_obj_t *label = lv_label_create(btn);
-    lv_obj_set_width(label, 470);
+    constrain_label(label, 318, LV_LABEL_LONG_DOT);
     set_cjk_font(label);
-    lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
     lv_obj_align(label, LV_ALIGN_TOP_LEFT, 82, 48);
     task_views[slot].label = label;
   }
@@ -1172,14 +1319,74 @@ void toggle_task(size_t task_index) {
 
 void build_task_grid() {
   task_grid = lv_obj_create(root);
-  lv_obj_set_size(task_grid, 760, 302);
-  lv_obj_align(task_grid, LV_ALIGN_TOP_MID, 0, 118);
+  lv_obj_set_size(task_grid, TASK_GRID_W, 302);
+  lv_obj_align(task_grid, LV_ALIGN_TOP_LEFT, 0, 118);
   make_static_touch_obj(task_grid);
   lv_obj_set_style_bg_opa(task_grid, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(task_grid, 0, 0);
   lv_obj_set_style_pad_all(task_grid, 0, 0);
 
   render_tasks();
+}
+
+void build_info_panel() {
+  lv_obj_t *panel = lv_obj_create(root);
+  lv_obj_set_size(panel, INFO_PANEL_W, 302);
+  lv_obj_align(panel, LV_ALIGN_TOP_RIGHT, 0, 118);
+  make_static_touch_obj(panel);
+  lv_obj_set_style_radius(panel, 12, 0);
+  lv_obj_set_style_bg_color(panel, lv_color_hex(0xffffff), 0);
+  lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_color(panel, lv_color_hex(0xeee7da), 0);
+  lv_obj_set_style_border_width(panel, 1, 0);
+  lv_obj_set_style_pad_all(panel, 14, 0);
+
+  const int16_t info_text_w = INFO_PANEL_W - 28;
+
+  lv_obj_t *place = lv_label_create(panel);
+  lv_label_set_text(place, "北京朝阳");
+  set_cjk_font(place);
+  constrain_label(place, info_text_w, LV_LABEL_LONG_DOT);
+  lv_obj_set_style_text_color(place, lv_color_hex(0x6e675d), 0);
+  lv_obj_align(place, LV_ALIGN_TOP_LEFT, 0, 0);
+
+  info_time_label = lv_label_create(panel);
+  lv_label_set_text(info_time_label, "--:--");
+  lv_obj_set_style_text_font(info_time_label, &lv_font_montserrat_32, 0);
+  constrain_label(info_time_label, info_text_w, LV_LABEL_LONG_DOT);
+  lv_obj_set_style_text_color(info_time_label, lv_color_hex(0x171512), 0);
+  lv_obj_align(info_time_label, LV_ALIGN_TOP_LEFT, 0, 36);
+
+  lv_obj_t *temp_title = lv_label_create(panel);
+  lv_label_set_text(temp_title, "温度");
+  set_cjk_font(temp_title);
+  constrain_label(temp_title, info_text_w, LV_LABEL_LONG_DOT);
+  lv_obj_set_style_text_color(temp_title, lv_color_hex(0x9a9184), 0);
+  lv_obj_align(temp_title, LV_ALIGN_TOP_LEFT, 0, 108);
+
+  info_temp_label = lv_label_create(panel);
+  lv_label_set_text(info_temp_label, weather_temp_text);
+  lv_obj_set_style_text_font(info_temp_label, &lv_font_montserrat_32, 0);
+  constrain_label(info_temp_label, info_text_w, LV_LABEL_LONG_DOT);
+  lv_obj_set_style_text_color(info_temp_label, lv_color_hex(0x5d8fb4), 0);
+  lv_obj_align(info_temp_label, LV_ALIGN_TOP_LEFT, 0, 138);
+
+  info_weather_label = lv_label_create(panel);
+  lv_label_set_text(info_weather_label, weather_condition_text);
+  set_cjk_title_font(info_weather_label);
+  constrain_label(info_weather_label, info_text_w, LV_LABEL_LONG_DOT);
+  lv_obj_set_style_text_color(info_weather_label, lv_color_hex(0x171512), 0);
+  lv_obj_align(info_weather_label, LV_ALIGN_TOP_LEFT, 0, 188);
+
+  info_rain_label = lv_label_create(panel);
+  lv_label_set_text(info_rain_label, weather_rain_text);
+  constrain_label(info_rain_label, info_text_w, LV_LABEL_LONG_DOT);
+  set_cjk_font(info_rain_label);
+  lv_obj_set_style_text_color(info_rain_label, lv_color_hex(0xef7f65), 0);
+  lv_obj_align(info_rain_label, LV_ALIGN_TOP_LEFT, 0, 230);
+
+  update_clock_label();
+  update_weather_labels();
 }
 
 void brightness_slider_event(lv_event_t *) {
@@ -1955,15 +2162,18 @@ void build_ui() {
   lv_label_set_text(status_label, "启动中");
   lv_obj_set_style_text_color(status_label, lv_color_hex(0x6e675d), 0);
   set_cjk_font(status_label);
+  constrain_label(status_label, 230, LV_LABEL_LONG_DOT);
   lv_obj_align(status_label, LV_ALIGN_TOP_RIGHT, -8, 10);
 
   summary_label = lv_label_create(root);
   lv_obj_set_style_text_color(summary_label, lv_color_hex(0x6e675d), 0);
   set_cjk_font(summary_label);
+  constrain_label(summary_label, 430, LV_LABEL_LONG_DOT);
   lv_obj_align(summary_label, LV_ALIGN_TOP_LEFT, 10, 78);
   update_summary();
 
   build_task_grid();
+  build_info_panel();
   build_brightness_controls();
   build_wifi_setup_panel();
 
@@ -2053,6 +2263,10 @@ void loop() {
     wifi_connect_pending = false;
     connect_saved_wifi();
   }
+  if (millis() - last_clock_update_ms > CLOCK_UPDATE_INTERVAL_MS) {
+    update_clock_label();
+    last_clock_update_ms = millis();
+  }
   handle_completion_sync_ui_state();
   process_sync_failure_report();
   if (millis() - last_heartbeat_ms > 5000) {
@@ -2064,6 +2278,10 @@ void loop() {
   if (!completion_sync_busy && completion_queue_empty && !provisioning_active && WiFi.status() == WL_CONNECTED && millis() >= next_cloud_sync_ms) {
     last_cloud_sync_ms = millis();
     sync_from_cloud();
+  }
+  if (!provisioning_active && WiFi.status() == WL_CONNECTED &&
+      millis() - last_weather_sync_ms > WEATHER_SYNC_INTERVAL_MS) {
+    sync_weather();
   }
   delay(5);
 }
