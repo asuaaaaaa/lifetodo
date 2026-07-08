@@ -63,7 +63,17 @@ jobs:
           username: ${{ secrets.ALIYUN_USER }}
           key: ${{ secrets.ALIYUN_SSH_KEY }}
           script: |
+            APP_PATH="${{ secrets.ALIYUN_APP_PATH || '/var/www/lifetodo' }}"
+
             if sudo systemctl list-unit-files lifetodo-api.service >/dev/null 2>&1; then
+              SERVICE_WORKDIR="$(sudo systemctl show lifetodo-api -p WorkingDirectory --value 2>/dev/null || true)"
+              if [ -n "$SERVICE_WORKDIR" ] && [ "$SERVICE_WORKDIR" != "$APP_PATH" ] && [ -d "$SERVICE_WORKDIR" ]; then
+                echo "Syncing API runtime from $APP_PATH to lifetodo-api WorkingDirectory $SERVICE_WORKDIR"
+                sudo mkdir -p "$SERVICE_WORKDIR/api"
+                sudo cp -R "$APP_PATH/api/." "$SERVICE_WORKDIR/api/"
+                sudo cp "$APP_PATH/package.json" "$SERVICE_WORKDIR/package.json"
+              fi
+
               sudo systemctl restart lifetodo-api
               sudo systemctl --no-pager --full status lifetodo-api
             else
