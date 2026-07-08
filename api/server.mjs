@@ -120,12 +120,47 @@ async function fetchBeijingChaoyangWeather(now = () => new Date()) {
   url.searchParams.set("forecast_days", "1");
   url.searchParams.set("timezone", "Asia/Shanghai");
 
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Weather provider returned ${response.status}`);
-  }
-  const data = await response.json();
+  const data = await getJson(url);
   return normalizeWeather(data, now());
+}
+
+async function getJson(url) {
+  const endpoint = new URL(url);
+  const requestImpl = endpoint.protocol === "https:" ? httpsRequest : httpRequest;
+  return await new Promise((resolvePromise, reject) => {
+    const request = requestImpl(
+      {
+        method: "GET",
+        hostname: endpoint.hostname,
+        port: endpoint.port || (endpoint.protocol === "https:" ? 443 : 80),
+        path: `${endpoint.pathname}${endpoint.search}`,
+        headers: {
+          "Accept": "application/json",
+          "User-Agent": "LifeTodo/0.1"
+        },
+        timeout: 10000
+      },
+      (response) => {
+        const chunks = [];
+        response.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+        response.on("end", () => {
+          const body = Buffer.concat(chunks).toString("utf8");
+          if (response.statusCode < 200 || response.statusCode >= 300) {
+            reject(new Error(`Weather provider returned ${response.statusCode}`));
+            return;
+          }
+          try {
+            resolvePromise(JSON.parse(body));
+          } catch (error) {
+            reject(new Error(`Weather provider returned invalid JSON: ${error.message}`));
+          }
+        });
+      }
+    );
+    request.on("timeout", () => request.destroy(new Error("Weather provider timed out")));
+    request.on("error", reject);
+    request.end();
+  });
 }
 
 function normalizeWeather(data, date = new Date()) {
