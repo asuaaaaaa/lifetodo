@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 
 import { defaultSeed } from "./default-seed.mjs";
 import { createLarkBaseStore } from "./lark-base-store.mjs";
-import { normalizeState, setCompletion, upsertDevice, checkAndNotifyOverdueTasks } from "./state-utils.mjs";
+import { normalizeState, setCompletion, todayKey, upsertDevice, checkAndNotifyOverdueTasks } from "./state-utils.mjs";
 
 const defaultHomeId = process.env.LIFETODO_HOME_ID || "demo-home";
 const defaultAlertChatId = "oc_e0fade30cf1d453b162f7a8748d3bab9";
@@ -69,6 +69,32 @@ export function createApiHandler({
         return jsonResponse({ homeId, weather });
       }
 
+      if (url.pathname === "/api/ha/status" && request.method === "GET") {
+        const state = await readOrSeed(store, homeId, seed, now);
+        await checkAndNotifyOverdueTasks(state, homeId, alertNotifier, now);
+        const weather = await weatherProvider(now);
+        return jsonResponse(buildHomeAssistantStatus(homeId, state, weather, now()));
+      }
+
+      const haCompleteMatch = url.pathname.match(/^\/api\/ha\/tasks\/([^/]+)\/complete$/);
+      if (haCompleteMatch && request.method === "POST") {
+        const taskId = decodeURIComponent(haCompleteMatch[1]);
+        const body = await request.json().catch(() => ({}));
+        const state = await readOrSeed(store, homeId, seed, now);
+        const task = state.tasks.find((item) => item.id === taskId);
+        if (!task) {
+          return jsonResponse({ error: "Task not found" }, 404);
+        }
+        const date = body.date || todayKey(now());
+        const completed = body.completed !== false;
+        setCompletion(state, taskId, date, completed, body.source || "home-assistant", now);
+        await checkAndNotifyOverdueTasks(state, homeId, alertNotifier, now);
+        await store.writeState(homeId, state, body.source || "home-assistant");
+        const refreshedState = normalizeState(state, now);
+        const weather = await weatherProvider(now);
+        return jsonResponse(buildHomeAssistantStatus(homeId, refreshedState, weather, now()));
+      }
+
       if (url.pathname === "/api/devices/heartbeat" && request.method === "POST") {
         const body = await request.json();
         if (!body.deviceId) {
@@ -108,6 +134,47 @@ export function createApiHandler({
     } catch (error) {
       return jsonResponse({ error: error.message || "Internal server error" }, 500);
     }
+  };
+}
+
+function buildHomeAssistantStatus(homeId, state, weather, date = new Date()) {
+  const today = todayKey(date);
+  const todayTasks = state.tasks.filter((task) => task.isDueToday && task.enabled !== false);
+  const completedToday = todayTasks.filter((task) => task.isCompletedToday).length;
+  const remainingTasks = todayTasks.filter((task) => !task.isCompletedToday);
+  const alertTasks = state.tasks.filter((task) => task.enabled !== false && !task.isCompletedToday && task.missedCount >= 2);
+  const onlineDevices = state.devices.filter((device) => device.status === "online");
+
+  return {
+    homeId,
+    date: today,
+    summary: {
+      todayTotal: todayTasks.length,
+      completedToday,
+      remainingToday: remainingTasks.length,
+      hasStrongAlert: alertTasks.length > 0,
+      strongAlertCount: alertTasks.length
+    },
+    weather,
+    devices: {
+      total: state.devices.length,
+      onlineCount: onlineDevices.length,
+      online: onlineDevices.map((device) => ({
+        id: device.id,
+        name: device.name,
+        location: device.location,
+        lastSeenAt: device.lastSeenAt
+      }))
+    },
+    tasks: remainingTasks.map((task) => ({
+      id: task.id,
+      title: task.title,
+      label: task.label || "",
+      assigneeId: task.assigneeId || "",
+      missedCount: task.missedCount || 0,
+      overdueType: task.overdueType || "",
+      isStrongAlert: task.missedCount >= 2
+    }))
   };
 }
 

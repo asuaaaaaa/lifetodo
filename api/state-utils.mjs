@@ -355,6 +355,7 @@ export function setCompletion(state, taskId, date, completed, source, now = () =
   state.completions[key] = {
     taskId,
     date,
+    completed: true,
     completedAt: now().toISOString(),
     source
   };
