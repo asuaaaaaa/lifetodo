@@ -1,4 +1,5 @@
 import { createStore, getHomeId } from "./lifetodo-store.js";
+import { createClientId } from "./id-utils.js";
 
 const todayKey = new Date().toISOString().slice(0, 10);
 const isDevicePage = document.body.classList.contains("device-only");
@@ -106,7 +107,7 @@ function bindEvents() {
     const recurrence = parseRecurrence(form);
     const { assigneeIds, assigneeId } = parseAssignee(form);
     await store.addTask({
-      id: crypto.randomUUID(),
+      id: createClientId("task"),
       title: String(form.get("title")).trim(),
       assigneeId,
       assigneeIds,
@@ -128,7 +129,7 @@ function bindEvents() {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     await store.addMember({
-      id: crypto.randomUUID(),
+      id: createClientId("member"),
       name: String(form.get("name")).trim(),
       color: String(form.get("color") || "#ef7f65")
     });
