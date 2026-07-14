@@ -244,12 +244,17 @@ function startOfDay(date) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
 
-function completionKey(taskId) {
-  return `${taskId}_${todayKey}`;
+function completionDate(task) {
+  return task?.isOverdue && task?.lastReminderDate ? task.lastReminderDate : todayKey;
+}
+
+function completionKey(task) {
+  return `${task.id}_${completionDate(task)}`;
 }
 
 async function toggleTask(taskId, completed) {
-  await store.setCompletion(taskId, todayKey, !completed, isDevicePage ? "device-h5" : "app-h5");
+  const task = state().tasks.find((item) => item.id === taskId);
+  await store.setCompletion(taskId, completionDate(task), !completed, isDevicePage ? "device-h5" : "app-h5");
   render();
 }
 
@@ -258,7 +263,7 @@ function state() {
 }
 
 function todaysTasks() {
-  return state().tasks.filter(isDueToday);
+  return state().tasks.filter((task) => task.overdueType || task.isDueToday || isDueToday(task));
 }
 
 function render() {
@@ -315,7 +320,7 @@ function renderSummary() {
   const container = document.querySelector("#summaryStrip");
   if (!container) return;
   const due = todaysTasks();
-  const done = due.filter((task) => state().completions[completionKey(task.id)]).length;
+  const done = due.filter((task) => state().completions[completionKey(task)]).length;
   container.innerHTML = [metric(due.length, "今日事项"), metric(done, "已完成"), metric(due.length - done, "待处理")].join("");
 }
 
@@ -336,7 +341,7 @@ function renderToday() {
 }
 
 function memberSection(member, tasks) {
-  const count = tasks.filter((task) => !state().completions[completionKey(task.id)]).length;
+  const count = tasks.filter((task) => !state().completions[completionKey(task)]).length;
   return `
     <section class="member-section">
       <div class="member-head">
@@ -349,7 +354,7 @@ function memberSection(member, tasks) {
 }
 
 function taskButton(task) {
-  const done = Boolean(state().completions[completionKey(task.id)]);
+  const done = Boolean(state().completions[completionKey(task)]);
   const isStrong = !done && (task.missedCount >= 2 || task.overdueType === "today_strong");
   const isFront = !done && task.overdueType === "pending_front";
   
@@ -453,7 +458,7 @@ function renderDeviceScreen() {
   const screen = document.querySelector("#deviceScreen");
   if (!screen) return;
   const due = todaysTasks();
-  const remaining = due.filter((task) => !state().completions[completionKey(task.id)]).length;
+  const remaining = due.filter((task) => !state().completions[completionKey(task)]).length;
   screen.innerHTML = `
     <div class="device-head">
       <strong>今日</strong>
@@ -542,7 +547,7 @@ function devicePerson(member, tasks) {
 }
 
 function deviceTask(task) {
-  const done = Boolean(state().completions[completionKey(task.id)]);
+  const done = Boolean(state().completions[completionKey(task)]);
   const isStrong = !done && (task.missedCount >= 2 || task.overdueType === "today_strong");
   const isFront = !done && task.overdueType === "pending_front";
   let tag = "";

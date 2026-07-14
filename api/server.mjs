@@ -53,9 +53,10 @@ export function createApiHandler({
         }
         const state = await readOrSeed(store, homeId, seed, now);
         setCompletion(state, body.taskId, body.date, body.completed !== false, body.source || "api", now);
-        await checkAndNotifyOverdueTasks(state, homeId, alertNotifier, now);
-        await store.writeState(homeId, state, body.source || "api");
-        return jsonResponse({ homeId, state });
+        const refreshedState = normalizeState(state, now);
+        await checkAndNotifyOverdueTasks(refreshedState, homeId, alertNotifier, now);
+        await store.writeState(homeId, refreshedState, body.source || "api");
+        return jsonResponse({ homeId, state: refreshedState });
       }
 
       if (url.pathname === "/api/tasks/check-overdue" && (request.method === "POST" || request.method === "GET")) {
@@ -88,9 +89,9 @@ export function createApiHandler({
         const date = body.date || todayKey(now());
         const completed = body.completed !== false;
         setCompletion(state, taskId, date, completed, body.source || "home-assistant", now);
-        await checkAndNotifyOverdueTasks(state, homeId, alertNotifier, now);
-        await store.writeState(homeId, state, body.source || "home-assistant");
         const refreshedState = normalizeState(state, now);
+        await checkAndNotifyOverdueTasks(refreshedState, homeId, alertNotifier, now);
+        await store.writeState(homeId, refreshedState, body.source || "home-assistant");
         const weather = await weatherProvider(now);
         return jsonResponse(buildHomeAssistantStatus(homeId, refreshedState, weather, now()));
       }

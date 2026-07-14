@@ -542,10 +542,23 @@ function setLocalCompletion(state, taskId, date, completed, source) {
     delete state.completions[key];
     return;
   }
+  const completedAt = new Date();
+  const task = state.tasks.find((item) => item.id === taskId);
+  if (task?.recurrence?.type === "intervalDays") {
+    task.recurrence = {
+      ...task.recurrence,
+      anchorDate: toDateKey(completedAt)
+    };
+  }
   state.completions[key] = {
     taskId,
     date,
-    completedAt: new Date().toISOString(),
+    completed: true,
+    completedAt: completedAt.toISOString(),
     source
   };
+}
+
+function toDateKey(date) {
+  return date.toISOString().slice(0, 10);
 }

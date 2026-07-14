@@ -347,18 +347,38 @@ export function upsertDevice(devices, device) {
 }
 
 export function setCompletion(state, taskId, date, completed, source, now = () => new Date()) {
-  const key = `${taskId}_${date}`;
+  const completedAt = now();
+  const completedAtDate = todayKey(completedAt);
+  const task = state.tasks?.find((item) => item.id === taskId);
+  const effectiveDate = completed ? completionTargetDate(task, date, completedAtDate) : date;
+  const key = `${taskId}_${effectiveDate}`;
   if (!completed) {
     delete state.completions[key];
     return;
   }
+
+  if (task?.recurrence?.type === "intervalDays") {
+    task.recurrence = {
+      ...task.recurrence,
+      anchorDate: completedAtDate
+    };
+  }
+
   state.completions[key] = {
     taskId,
-    date,
+    date: effectiveDate,
     completed: true,
-    completedAt: now().toISOString(),
+    completedAt: completedAt.toISOString(),
     source
   };
+}
+
+function completionTargetDate(task, requestedDate, completedAtDate) {
+  if (!task) return requestedDate;
+  if (requestedDate === completedAtDate && task.isOverdue && task.lastReminderDate) {
+    return task.lastReminderDate;
+  }
+  return requestedDate;
 }
 
 export function formatBaseDateTime(date) {

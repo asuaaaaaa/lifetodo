@@ -342,10 +342,10 @@ function taskToRecord(task, state, now) {
     Enabled: task.enabled !== false,
     "Recurrence Type": recurrence.type || "intervalDays",
     "Interval Every": recurrence.type === "intervalDays" ? Number(recurrence.every || 1) : null,
-    "Anchor Date": recurrence.type === "intervalDays" ? recurrence.anchorDate || todayKey(now()) : null,
+    "Anchor Date": recurrence.type === "intervalDays" ? recurrence.anchorDate || completionDateForInterval(completion, now()) : null,
     Weekdays: recurrence.type === "weekly" ? (recurrence.daysOfWeek || []).join(",") : "",
     "Monthly Day": recurrence.type === "monthlyDate" ? Number(recurrence.day || 1) : null,
-    "Next Date": nextDueDate(task, completion?.date || null, now()),
+    "Next Date": nextDueDate(task, completion, now()),
     Label: task.label || recurrenceLabelFromTask(task),
     "Last Completed Date": completion?.date || null,
     "Last Completed At": completion?.completedAt ? formatBaseDateTime(new Date(completion.completedAt)) : null,
@@ -359,9 +359,11 @@ function latestCompletionForTask(completions, taskId) {
     .sort((a, b) => String(b.date).localeCompare(String(a.date)))[0];
 }
 
-function nextDueDate(task, lastCompletedDate, now) {
+function nextDueDate(task, completion, now) {
   const recurrence = task.recurrence || {};
-  const from = parseDate(lastCompletedDate || todayKey(now));
+  const from = recurrence.type === "intervalDays"
+    ? parseDate(completionDateForInterval(completion, now))
+    : parseDate(todayKey(now));
   if (recurrence.type === "monthlyDate") {
     const day = Number(recurrence.day || 1);
     const next = new Date(from.getFullYear(), from.getMonth(), day);
@@ -379,6 +381,14 @@ function nextDueDate(task, lastCompletedDate, now) {
   const next = new Date(from);
   next.setDate(from.getDate() + Number(recurrence.every || 1));
   return todayKey(next);
+}
+
+function completionDateForInterval(completion, now) {
+  if (completion?.completedAt) {
+    const completedAt = new Date(completion.completedAt);
+    if (!isNaN(completedAt.getTime())) return todayKey(completedAt);
+  }
+  return completion?.date || todayKey(now);
 }
 
 function recurrenceLabel(fields, recurrenceType) {

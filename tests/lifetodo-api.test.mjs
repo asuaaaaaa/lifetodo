@@ -54,6 +54,48 @@ test("POST /api/completions toggles a completion and persists the full state", a
   assert.equal(body.state.completions["litter_2026-07-02"].source, "device-esp32");
 });
 
+test("POST /api/completions clears an overdue interval task and re-anchors it to the actual completion date", async () => {
+  let saved;
+  const handler = createApiHandler({
+    store: {
+      readState: async () => ({
+        members: [{ id: "piggy", name: "猪猪" }],
+        tasks: [
+          {
+            id: "litter",
+            title: "铲猫砂盆",
+            assigneeId: "piggy",
+            recurrence: { type: "intervalDays", every: 3, anchorDate: "2026-07-01" },
+            enabled: true
+          }
+        ],
+        devices: [],
+        completions: {}
+      }),
+      writeState: async (homeId, state, source) => {
+        saved = { homeId, state, source };
+      }
+    },
+    seed: { members: [], tasks: [], devices: [], completions: {} },
+    now: () => new Date("2026-07-06T08:00:00.000Z")
+  });
+
+  const response = await handler(
+    new Request("http://localhost/api/completions?home=demo-home", {
+      method: "POST",
+      body: JSON.stringify({ taskId: "litter", date: "2026-07-06", completed: true, source: "device-esp32" })
+    })
+  );
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(saved.state.completions["litter_2026-07-04"].completed, true);
+  assert.equal(saved.state.completions["litter_2026-07-04"].completedAt, "2026-07-06T08:00:00.000Z");
+  assert.equal(saved.state.tasks[0].recurrence.anchorDate, "2026-07-06");
+  assert.equal(body.state.tasks[0].isOverdue, false);
+  assert.equal(body.state.tasks[0].overdueType, "");
+});
+
 test("POST /api/devices/sync-failure sends a notification payload", async () => {
   let notification;
   const handler = createApiHandler({

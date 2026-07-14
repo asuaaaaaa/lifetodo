@@ -237,6 +237,81 @@ test("writes completion records to the dedicated completion table", async () => 
   assert.equal(json.Source, "device-esp32");
 });
 
+test("calculates next dates using actual completion date for interval tasks and calendar dates for fixed tasks", async () => {
+  const calls = [];
+  const execFile = async (command, args) => {
+    calls.push([command, args]);
+    if (args.includes("+record-list")) {
+      return {
+        stdout: JSON.stringify({
+          ok: true,
+          data: {
+            data: [["interval"], ["monthly"]],
+            fields: ["Task ID"],
+            record_id_list: ["rec_interval", "rec_monthly"]
+          }
+        })
+      };
+    }
+    return { stdout: JSON.stringify({ ok: true }) };
+  };
+
+  const store = createLarkBaseStore({
+    baseToken: "bas_demo",
+    tableId: "tbl_todos",
+    execFile,
+    now: () => new Date("2026-07-06T08:00:00.000Z")
+  });
+
+  await store.writeState(
+    "demo-home",
+    {
+      members: [{ id: "piggy", name: "猪猪", color: "#ef7f65" }],
+      tasks: [
+        {
+          id: "interval",
+          title: "间隔任务",
+          assigneeId: "piggy",
+          recurrence: { type: "intervalDays", every: 3, anchorDate: "2026-07-06" },
+          enabled: true
+        },
+        {
+          id: "monthly",
+          title: "固定日期任务",
+          assigneeId: "piggy",
+          recurrence: { type: "monthlyDate", day: 2 },
+          enabled: true
+        }
+      ],
+      devices: [],
+      completions: {
+        "interval_2026-07-04": {
+          taskId: "interval",
+          date: "2026-07-04",
+          completedAt: "2026-07-06T08:00:00.000Z",
+          source: "device-esp32"
+        },
+        "monthly_2026-07-02": {
+          taskId: "monthly",
+          date: "2026-07-02",
+          completedAt: "2026-07-06T08:00:00.000Z",
+          source: "device-esp32"
+        }
+      }
+    },
+    "device-esp32"
+  );
+
+  const upserts = calls.filter(([, args]) => args.includes("+record-upsert"));
+  const records = upserts.map(([, args]) => JSON.parse(args[args.indexOf("--json") + 1]));
+  const interval = records.find((record) => record["Task ID"] === "interval");
+  const monthly = records.find((record) => record["Task ID"] === "monthly");
+
+  assert.equal(interval["Anchor Date"], "2026-07-06");
+  assert.equal(interval["Next Date"], "2026-07-09");
+  assert.equal(monthly["Next Date"], "2026-08-02");
+});
+
 test("deletes TODO records that no longer exist in app state", async () => {
   const calls = [];
   const execFile = async (command, args) => {
