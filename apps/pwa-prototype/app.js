@@ -403,7 +403,10 @@ function renderTasks() {
       return `
         <section class="member-section ${task.id === highlightedTaskId ? "optimistic-insert" : ""}">
           <div class="member-head">
-            <div class="member-name"><span class="dot" style="--accent:${member?.color || "#ef7f65"}"></span>${escapeHtml(task.title)}</div>
+            <label class="task-title-field">
+              <span class="dot" style="--accent:${member?.color || "#ef7f65"}"></span>
+              <input value="${escapeHtml(task.title)}" data-task-action="rename" data-task-id="${escapeHtml(task.id)}" aria-label="任务名称">
+            </label>
             <span class="task-meta">${task.enabled === false ? "已停用" : "启用中"}</span>
           </div>
           <span class="task-meta">${metaText}</span>
@@ -576,7 +579,34 @@ function bindTaskButtons() {
 }
 
 function bindTaskManagementButtons() {
+  document.querySelectorAll("[data-task-action='rename']").forEach((input) => {
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        input.blur();
+      }
+      if (event.key === "Escape") {
+        const task = state().tasks.find((item) => item.id === input.dataset.taskId);
+        input.value = task?.title || "";
+        input.blur();
+      }
+    });
+    input.addEventListener("change", async () => {
+      const task = state().tasks.find((item) => item.id === input.dataset.taskId);
+      const title = input.value.trim();
+      if (!task) return;
+      if (!title) {
+        input.value = task.title;
+        return;
+      }
+      if (title === task.title) return;
+      await store.updateTask(input.dataset.taskId, { title });
+      render();
+    });
+  });
+
   document.querySelectorAll("[data-task-action]").forEach((button) => {
+    if (button.dataset.taskAction === "rename") return;
     button.addEventListener("click", async () => {
       const taskId = button.dataset.taskId;
       const task = state().tasks.find((item) => item.id === taskId);
