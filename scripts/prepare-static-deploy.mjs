@@ -17,6 +17,8 @@ await cp(resolve(source, "styles.css"), resolve(output, "app/styles.css"));
 await cp(resolve(source, "styles.css"), resolve(output, "device/styles.css"));
 await cp(resolve(source, "app.js"), resolve(output, "app/app.js"));
 await cp(resolve(source, "app.js"), resolve(output, "device/app.js"));
+await cp(resolve(source, "id-utils.js"), resolve(output, "app/id-utils.js"));
+await cp(resolve(source, "id-utils.js"), resolve(output, "device/id-utils.js"));
 await cp(resolve(source, "lifetodo-store.js"), resolve(output, "app/lifetodo-store.js"));
 await cp(resolve(source, "lifetodo-store.js"), resolve(output, "device/lifetodo-store.js"));
 await cp(resolve(source, "manifest.webmanifest"), resolve(output, "app/manifest.webmanifest"));
