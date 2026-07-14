@@ -11,3 +11,7 @@ npm-debug.log*
 firmware/esp32-touch-lcd-4.3/.pio/
 firmware/esp32-touch-lcd-4.3/lib/
 firmware/esp32-touch-lcd-4.3/include/app_config.h
+
+apps/android-webview/.gradle/
+apps/android-webview/local.properties
+apps/android-webview/app/build/
