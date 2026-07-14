@@ -167,6 +167,12 @@ h1 {
   box-shadow: 0 10px 30px rgba(42, 33, 22, 0.05);
 }
 
+.member-section.optimistic-insert {
+  animation: optimistic-insert 420ms ease-out both;
+  border-color: rgba(107, 163, 111, 0.42);
+  box-shadow: 0 14px 34px rgba(42, 33, 22, 0.08), 0 0 0 4px rgba(107, 163, 111, 0.1);
+}
+
 .member-head {
   display: flex;
   justify-content: space-between;
@@ -462,6 +468,11 @@ input[type="color"] {
   background: var(--ink);
   color: white;
   cursor: pointer;
+  transition: transform 120ms ease, opacity 120ms ease, box-shadow 160ms ease;
+}
+
+.primary-button:hover {
+  box-shadow: 0 10px 24px rgba(23, 21, 18, 0.14);
 }
 
 .row-actions {
@@ -656,5 +667,16 @@ input[type="color"] {
     min-height: 100vh;
     border: 0;
     border-radius: 0;
+  }
+}
+
+@keyframes optimistic-insert {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 }

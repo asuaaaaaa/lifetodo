@@ -3,6 +3,8 @@ const localKey = `lifetodo.${homeId}`;
 const apiBase = getApiBase();
 
 let syncTimer;
+let pendingCloudWrites = 0;
+let writeChain = Promise.resolve();
 
 export function getHomeId() {
   return homeId;
@@ -88,63 +90,60 @@ function createLocalStore(seed) {
 function createApiStore(local, onChange) {
   startPolling(local, onChange);
 
+  const syncLater = (source) => {
+    writeLocalState(local.getState());
+    onChange();
+    enqueueApiStateWrite(local.getState(), source, local, onChange);
+  };
+
   return {
     mode: "lark",
     getState: local.getState,
     replaceState: local.replaceState,
-    async addTask(task) {
+    addTask(task) {
       local.getState().tasks.push(task);
-      await writeApiState(local.getState(), "addTask");
-      writeLocalState(local.getState());
+      syncLater("addTask");
     },
-    async updateTask(taskId, patch) {
+    updateTask(taskId, patch) {
       local.getState().tasks = local.getState().tasks.map((task) => (task.id === taskId ? { ...task, ...patch } : task));
-      await writeApiState(local.getState(), "updateTask");
-      writeLocalState(local.getState());
+      syncLater("updateTask");
     },
-    async deleteTask(taskId) {
+    deleteTask(taskId) {
       local.getState().tasks = local.getState().tasks.filter((task) => task.id !== taskId);
       Object.keys(local.getState().completions).forEach((key) => {
         if (key.startsWith(`${taskId}_`)) {
           delete local.getState().completions[key];
         }
       });
-      await writeApiState(local.getState(), "deleteTask");
-      writeLocalState(local.getState());
+      syncLater("deleteTask");
     },
-    async addMember(member) {
+    addMember(member) {
       local.getState().members.push(member);
-      await writeApiState(local.getState(), "addMember");
-      writeLocalState(local.getState());
+      syncLater("addMember");
     },
-    async updateMember(memberId, patch) {
+    updateMember(memberId, patch) {
       local.getState().members = local
         .getState()
         .members.map((member) => (member.id === memberId ? { ...member, ...patch } : member));
-      await writeApiState(local.getState(), "updateMember");
-      writeLocalState(local.getState());
+      syncLater("updateMember");
     },
-    async deleteMember(memberId) {
+    deleteMember(memberId) {
       local.getState().members = local.getState().members.filter((member) => member.id !== memberId);
-      await writeApiState(local.getState(), "deleteMember");
-      writeLocalState(local.getState());
+      syncLater("deleteMember");
     },
-    async addDevice(device) {
+    addDevice(device) {
       local.getState().devices = upsertDevice(local.getState().devices, device);
-      await writeApiState(local.getState(), "addDevice");
-      writeLocalState(local.getState());
+      syncLater("addDevice");
     },
-    async updateDevice(deviceId, patch) {
+    updateDevice(deviceId, patch) {
       local.getState().devices = local
         .getState()
         .devices.map((device) => (device.id === deviceId ? { ...device, ...patch } : device));
-      await writeApiState(local.getState(), "updateDevice");
-      writeLocalState(local.getState());
+      syncLater("updateDevice");
     },
-    async deleteDevice(deviceId) {
+    deleteDevice(deviceId) {
       local.getState().devices = local.getState().devices.filter((device) => device.id !== deviceId);
-      await writeApiState(local.getState(), "deleteDevice");
-      writeLocalState(local.getState());
+      syncLater("deleteDevice");
     },
     async setCompletion(taskId, date, completed, source) {
       const response = await apiRequest(`/api/completions?home=${encodeURIComponent(homeId)}`, {
@@ -169,6 +168,7 @@ function createApiStore(local, onChange) {
 function startPolling(local, onChange) {
   clearInterval(syncTimer);
   syncTimer = setInterval(async () => {
+    if (pendingCloudWrites > 0) return;
     try {
       const response = await apiRequest(`/api/state?home=${encodeURIComponent(homeId)}`);
       local.replaceState(response.state);
@@ -179,8 +179,29 @@ function startPolling(local, onChange) {
   }, 5000);
 }
 
+function enqueueApiStateWrite(state, source, local, onChange) {
+  const snapshot = structuredClone(state);
+  pendingCloudWrites++;
+  writeChain = writeChain
+    .catch(() => {})
+    .then(async () => {
+      const response = await writeApiState(snapshot, source);
+      if (pendingCloudWrites === 1 && response?.state) {
+        local.replaceState(response.state);
+        onChange();
+      }
+    })
+    .catch((error) => {
+      console.warn("LifeTodo API background sync failed.", error);
+    })
+    .finally(() => {
+      pendingCloudWrites = Math.max(0, pendingCloudWrites - 1);
+    });
+  return writeChain;
+}
+
 async function writeApiState(state, source) {
-  await apiRequest(`/api/state?home=${encodeURIComponent(homeId)}`, {
+  return apiRequest(`/api/state?home=${encodeURIComponent(homeId)}`, {
     method: "PUT",
     body: JSON.stringify({ state, source })
   });

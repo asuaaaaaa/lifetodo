@@ -47,6 +47,7 @@ const seed = {
 };
 
 let store;
+let highlightedTaskId = "";
 
 const views = {
   today: document.querySelector("#todayView"),
@@ -106,8 +107,10 @@ function bindEvents() {
     const form = new FormData(event.currentTarget);
     const recurrence = parseRecurrence(form);
     const { assigneeIds, assigneeId } = parseAssignee(form);
+    const taskId = createClientId("task");
+    highlightedTaskId = taskId;
     await store.addTask({
-      id: createClientId("task"),
+      id: taskId,
       title: String(form.get("title")).trim(),
       assigneeId,
       assigneeIds,
@@ -119,6 +122,12 @@ function bindEvents() {
     updateRecurrenceFields();
     updateAssigneeModeFields();
     render();
+    window.setTimeout(() => {
+      if (highlightedTaskId === taskId) {
+        highlightedTaskId = "";
+        renderTasks();
+      }
+    }, 900);
   });
 
   document.querySelectorAll("input[name='assigneeMode']").forEach((input) => {
@@ -392,7 +401,7 @@ function renderTasks() {
         metaText = `${cycleSummary(task)} · ${escapeHtml(task.label)}`;
       }
       return `
-        <section class="member-section">
+        <section class="member-section ${task.id === highlightedTaskId ? "optimistic-insert" : ""}">
           <div class="member-head">
             <div class="member-name"><span class="dot" style="--accent:${member?.color || "#ef7f65"}"></span>${escapeHtml(task.title)}</div>
             <span class="task-meta">${task.enabled === false ? "已停用" : "启用中"}</span>
